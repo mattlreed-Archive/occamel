@@ -11,13 +11,15 @@ and milestones. Code follows the doc; if implementation reveals the doc is wrong
 **edit the doc deliberately (with a version bump + changelog line in the status
 header) in the same change** — never let them drift silently.
 
-**Current milestone: M1+M2** (design doc §11). M0 verdict was GO
-(`docs/research/m0-results.md`). M1: `occamel_ppx` derives T2-dialect schemas
-+ codecs; §8 repair loop; complexity warning. M2: loop mode
-(`Occamel.Loop`) — Ask/Invoke/Note/Approve effects, production + replay
-handlers, typed traces with schema-hash-checked replay, approval handler.
-Security-review fixes applied (`docs/research/m1-security-review.md`);
-F4 (trace signing) deferred to M4.
+**Current milestone: M4** (design doc §11). Done: M0 GO; M1 (ppx deriver,
+repair loop); M2 (loop mode: effects, replay, traces, approvals); M3 (strict
+mode: `Prov` lattice, `Trusted` boundary, `Strict` interpreter + admission +
+sink policies, `Strict_run` planner/replay). Each milestone has a
+`docs/research/m{N}-*.md` writeup + security review. M4 scope: Extract
+channel-width + unbounded-string lint (§13.2); whole-plan approval rendering
+(§13.6); replan-on-`Tool_error` (§6.5); `Secret.t` + trace redaction (§13.9);
+trace HMAC signing (retires F4). Deferred to M5: full §13.3 capability axis,
+typed per-tool arg codecs, Foreach (M3b).
 
 ## Build & test
 
