@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5"
+
+      - name: Install dependencies
+        run: opam install -y dune yojson ppxlib cohttp-eio eio_main qcheck alcotest
+
+      # Build everything — compiles the whole tree, including the bin/ demos
+      # (which are never *run* in CI: they need a local Ollama).
+      - name: Build
+        run: opam exec -- dune build
+
+      # Run the offline test suite. The Ollama-backed evals and the node-based
+      # differential fuzz harness are NOT (test) targets, so they don't run here.
+      - name: Test
+        run: opam exec -- dune runtest
