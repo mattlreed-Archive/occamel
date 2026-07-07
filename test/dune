@@ -14,3 +14,10 @@
  (name test_replay)
  (modules test_replay)
  (libraries occamel occamel_examples yojson))
+
+(test
+ (name test_golden)
+ (modules test_golden)
+ (deps
+  (glob_files_rec golden/*))
+ (libraries occamel occamel_examples yojson))
