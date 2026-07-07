@@ -49,4 +49,11 @@ Date: 2026-07-07 · design doc §6.5, §13.2, §13.6, §13.7, §13.9
 
 ## Security review
 
-`docs/research/m4-security-review.md`. [populated after review]
+`docs/research/m4-security-review.md`. The review confirmed F4/L3/whole-plan
+approval are genuinely retired and the replan Trusted-flow + admission/runtime
+lattice remain sound. Fixed: a MEDIUM channel-width under-report (open objects
+scored as bounded — the dangerous direction, now Unbounded), a MEDIUM
+redaction gap (plan/verdict/prov now scrubbed), and two LOW items (provenance
+escaping, signature-strip downgrade → Bad_signature under a key). One
+deliberate scope choice documented (approval prompts only when a sink needs
+it).
