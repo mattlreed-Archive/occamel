@@ -174,6 +174,7 @@ let rec ops_of_step (s : Occamel.Plan.step) : string list =
   | Return _ -> [ "return" ]
   | If { then_; else_; _ } ->
       "if" :: (List.concat_map ops_of_step then_ @ List.concat_map ops_of_step else_)
+  | Foreach { body; _ } -> "foreach" :: List.concat_map ops_of_step body
 
 let rec lits_of_step (s : Occamel.Plan.step) : string list =
   let lit = function Occamel.Plan.Lit v -> [ v ] | Var _ -> [] in
@@ -183,6 +184,7 @@ let rec lits_of_step (s : Occamel.Plan.step) : string list =
   | Return v -> lit v
   | If { cond; then_; else_ } ->
       lit cond @ List.concat_map lits_of_step then_ @ List.concat_map lits_of_step else_
+  | Foreach { over; body; _ } -> lit over @ List.concat_map lits_of_step body
 
 let contains ~needle haystack =
   let needle = String.lowercase_ascii needle and h = String.lowercase_ascii haystack in

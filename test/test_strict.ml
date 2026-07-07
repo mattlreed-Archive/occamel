@@ -265,4 +265,67 @@ let () =
   in
   assert ((S.analyze narrow_reg narrow_plan).lints = []);
 
+  (* Item 4: Foreach. Round-trip through the codec, per-element taint at
+     admission, and runtime iteration. *)
+  (* round-trip through the codec (uses a known tool for the of_json path) *)
+  let fe_roundtrip : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "list") ] };
+      Extract { bind = "items"; source = Var "r"; schema = None; question = "the list" };
+      Foreach { bind = "it"; over = Var "items";
+                body = [ Call { bind = "s"; tool = "web_search"; args = [ ("query", Var "it") ] };
+                         Return (Var "s") ] };
+      Return (Lit "done") ]
+  in
+  (match Occamel.Plan.of_json (Occamel.Plan.to_json fe_roundtrip) with
+  | Ok p -> assert (p = fe_roundtrip)
+  | Error e -> failwith (Occamel.Codec.error_to_string e));
+  (* per-element taint: a Foreach over an untrusted extraction makes the literal
+     delete.path inside the body attacker-influenced -> rejected (as with If
+     control-flow taint). admit works on the Plan.t value directly. *)
+  let fe_taint : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "list") ] };
+      Extract { bind = "items"; source = Var "r"; schema = None; question = "the list" };
+      Foreach { bind = "it"; over = Var "items";
+                body = [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/tmp/x") ] };
+                         Return (Var "d") ] };
+      Return (Lit "done") ]
+  in
+  assert (not (admitted fe_taint));
+
+  (* Foreach over a TRUSTED list feeding a trusted-only sink is admitted *)
+  let fe_ok : Pl.t =
+    [ Foreach { bind = "it"; over = Lit "[\"/a\",\"/b\"]";
+                body = [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/tmp/x") ] };
+                         Return (Var "d") ] };
+      Return (Lit "done") ]
+  in
+  assert (admitted fe_ok);
+
+  (* nested foreach in a body is rejected (depth-unrolled) *)
+  (match
+     Occamel.Plan.of_string
+       {|{"steps":[{"op":"foreach","bind":"i","over":{"kind":"lit","value":"[]"},
+          "body":[{"op":"foreach","bind":"j","over":{"kind":"var","name":"i"},"body":[]}]},
+         {"op":"return","value":{"kind":"lit","value":"x"}}]}|}
+   with
+  | Error _ -> ()
+  | Ok _ -> failwith "nested foreach should be rejected");
+
+  (* runtime: iterate a JSON-list value, running the body per element *)
+  let seen = ref 0 in
+  let count_hooks : S.exec_hooks =
+    { run_tool = (fun ~tool:_ ~args:_ -> incr seen; Ok "ok");
+      extract = (fun ~source:_ ~question:_ -> "");
+      approve = (fun ~tool:_ ~field:_ ~value:_ -> true) }
+  in
+  let count_reg = S.registry [ S.tool ~name:"noop" ~arg_schema:(S.obj_schema [ ("x", "string") ]) () ] in
+  let count_plan : Pl.t =
+    [ Foreach { bind = "e"; over = Lit "[\"a\",\"b\",\"c\"]";
+                body = [ Call { bind = "n"; tool = "noop"; args = [ ("x", Var "e") ] } ] };
+      Return (Lit "done") ]
+  in
+  (match S.run count_reg count_hooks count_plan with
+  | Ok _ -> assert (!seen = 3)  (* body ran once per element *)
+  | Error _ -> failwith "foreach runtime should succeed");
+
   print_endline "all strict tests passed"

@@ -15,6 +15,9 @@ type step =
   (* [schema] names a registered extraction schema the extractor answers INTO
      (§13.2 typed extraction). None = free-text (unbounded channel). *)
   | If of { cond : expr; then_ : step list; else_ : step list }
+  | Foreach of { bind : string; over : expr; body : step list }
+  (* iterate [over] (a list-valued binding), binding each element to [bind] in
+     [body]; body executes under the source's provenance + loop taint (§6.2) *)
   | Return of expr
 
 type t = step list
@@ -96,12 +99,17 @@ let schema : Yojson.Safe.t =
       [ ("op", tag "if"); ("cond", expr); ("then", inner_steps); ("else", inner_steps) ]
       [ "op"; "cond"; "then"; "else" ]
   in
+  let foreach =
+    obj
+      [ ("op", tag "foreach"); ("bind", nonempty_string); ("over", expr); ("body", inner_steps) ]
+      [ "op"; "bind"; "over"; "body" ]
+  in
   let steps =
     `Assoc
       [
         ("type", s "array");
         ("minItems", `Int 1);
-        ("items", `Assoc [ ("anyOf", `List [ call; extract; if_; return_ ]) ]);
+        ("items", `Assoc [ ("anyOf", `List [ call; extract; if_; foreach; return_ ]) ]);
       ]
   in
   obj [ ("steps", steps) ] [ "steps" ]
@@ -143,6 +151,14 @@ let rec json_of_step = function
           ("then", `List (List.map json_of_step then_));
           ("else", `List (List.map json_of_step else_));
         ]
+  | Foreach { bind; over; body } ->
+      `Assoc
+        [
+          ("op", `String "foreach");
+          ("bind", `String bind);
+          ("over", json_of_expr over);
+          ("body", `List (List.map json_of_step body));
+        ]
   | Return value -> `Assoc [ ("op", `String "return"); ("value", json_of_expr value) ]
 
 let to_json (plan : t) : Yojson.Safe.t =
@@ -175,7 +191,7 @@ let arg_of_json path json =
   let* value = expr_of_json (path ^ ".value") value in
   Ok (name, value)
 
-let rec step_of_json ~allow_if path json =
+let rec step_of_json ~allow_control path json =
   let* op = field path "op" json in
   let* op = as_string (path ^ ".op") op in
   match op with
@@ -214,18 +230,29 @@ let rec step_of_json ~allow_if path json =
       let* value = field path "value" json in
       let* value = expr_of_json (path ^ ".value") value in
       Ok (Return value)
-  | "if" when allow_if ->
+  | "if" when allow_control ->
       let* () = no_extra_fields path [ "op"; "cond"; "then"; "else" ] json in
       let* cond = field path "cond" json in
       let* cond = expr_of_json (path ^ ".cond") cond in
       let* then_ = field path "then" json in
       let* then_ = as_list (path ^ ".then") then_ in
-      let* then_ = map_result (step_of_json ~allow_if:false) 0 (path ^ ".then") then_ in
+      let* then_ = map_result (step_of_json ~allow_control:false) 0 (path ^ ".then") then_ in
       let* else_ = field path "else" json in
       let* else_ = as_list (path ^ ".else") else_ in
-      let* else_ = map_result (step_of_json ~allow_if:false) 0 (path ^ ".else") else_ in
+      let* else_ = map_result (step_of_json ~allow_control:false) 0 (path ^ ".else") else_ in
       Ok (If { cond; then_; else_ })
-  | "if" -> err ~code:Bad_enum path "nested \"if\" is not allowed (schema is depth-unrolled)"
+  | "foreach" when allow_control ->
+      let* () = no_extra_fields path [ "op"; "bind"; "over"; "body" ] json in
+      let* bind = field path "bind" json in
+      let* bind = nonempty (path ^ ".bind") bind in
+      let* over = field path "over" json in
+      let* over = expr_of_json (path ^ ".over") over in
+      let* body = field path "body" json in
+      let* body = as_list (path ^ ".body") body in
+      let* body = map_result (step_of_json ~allow_control:false) 0 (path ^ ".body") body in
+      Ok (Foreach { bind; over; body })
+  | ("if" | "foreach") ->
+      err ~code:Bad_enum path "nested \"if\"/\"foreach\" is not allowed (schema is depth-unrolled)"
   | other -> err ~code:Bad_enum (path ^ ".op") (Printf.sprintf "unknown op %S" other)
 
 (* Scoping: binds must be fresh, vars must be bound before use. After an [If],
@@ -266,6 +293,12 @@ let validate_scoping (plan : t) : (unit, error) result =
               let* _ = go (p ^ ".then") 0 bound then_ in
               let* _ = go (p ^ ".else") 0 bound else_ in
               Ok bound
+          | Foreach { bind; over; body } ->
+              let* () = expr_ok (p ^ ".over") bound over in
+              let* () = bind_ok p bound bind in
+              (* [bind] is in scope inside [body]; body binds don't escape *)
+              let* _ = go (p ^ ".body") 0 (bind :: bound) body in
+              Ok bound
           | Return value ->
               let* () = expr_ok (p ^ ".value") bound value in
               Ok bound
@@ -282,7 +315,7 @@ let of_json (json : Yojson.Safe.t) : (t, error) result =
     if steps = [] then err ~code:Refinement_failed "plan.steps" "plan must not be empty"
     else Ok ()
   in
-  let* plan = map_result (step_of_json ~allow_if:true) 0 "steps" steps in
+  let* plan = map_result (step_of_json ~allow_control:true) 0 "steps" steps in
   let* () = validate_scoping plan in
   Ok plan
 

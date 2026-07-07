@@ -32,5 +32,6 @@ let run (plan : Plan.t) : outcome =
         Runtime_error (Printf.sprintf "no implementation for tool %S" tool)
     | Plan.Extract _ :: _ -> Unsupported "extract (M3)"
     | Plan.If _ :: _ -> Unsupported "if (M3)"
+    | Plan.Foreach _ :: _ -> Unsupported "foreach (M3+)"
   in
   go [] plan

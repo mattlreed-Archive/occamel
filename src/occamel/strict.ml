@@ -252,6 +252,20 @@ let analyze (reg : registry) (plan : Plan.t) : report =
             (* branch-bound names don't escape (enforced by Plan scoping), so
                env is unchanged after the If *)
             env
+        | Plan.Foreach { bind; over; body } ->
+            (* per-element taint: iterating over untrusted data means both the
+               loop variable and the loop body are attacker-influenced (in
+               count and content) — same as the If case, applied to the body
+               (§6.2, M3b). The loop var inherits [over]'s provenance. *)
+            let over_prov = prov_of_expr env over in
+            let taint =
+              if Prov.is_trusted over_prov then branch_taint
+              else Prov.add_branch "foreach" (Prov.join branch_taint over_prov)
+            in
+            let elem_prov = Prov.join taint over_prov in
+            let _ = walk ((bind, elem_prov) :: env) ~branch_taint:taint body in
+            (* body binds (incl. [bind]) don't escape the loop *)
+            env
         | Plan.Return e ->
             (* display sink: any provenance allowed *)
             let _ = prov_of_expr env e in
@@ -446,6 +460,32 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             (match branch_result with
             | Some v -> Ok (Some v, env)  (* branch returned; whole plan done *)
             | None -> walk env ~branch_taint rest)
+        | Plan.Foreach { bind; over; body } ->
+            let* ov = value_of_expr env over in
+            let taint =
+              if Prov.is_trusted ov.prov then branch_taint
+              else Prov.add_branch "foreach" (Prov.join branch_taint ov.prov)
+            in
+            (* [over]'s data is a JSON array; iterate its string elements. A
+               non-array is a runtime error. *)
+            let* elements =
+              match Yojson.Safe.from_string ov.data with
+              | `List xs ->
+                  Ok (List.map (function `String s -> s | j -> Yojson.Safe.to_string j) xs)
+              | _ -> Error (Tool_error { tool = "foreach"; error = "over is not a JSON list" })
+              | exception _ -> Error (Tool_error { tool = "foreach"; error = "over is not valid JSON" })
+            in
+            (* run the body per element; a body Return ends the whole plan
+               (first element that returns wins) *)
+            let rec iter = function
+              | [] -> Ok (None, env)
+              | elem :: more ->
+                  let elem_v = { data = elem; prov = Prov.join taint ov.prov } in
+                  let* r, _ = walk ((bind, elem_v) :: env) ~branch_taint:taint body in
+                  (match r with Some v -> Ok (Some v, env) | None -> iter more)
+            in
+            let* r, _ = iter elements in
+            (match r with Some v -> Ok (Some v, env) | None -> walk env ~branch_taint rest)
         | Plan.Return e ->
             let* v = value_of_expr env e in
             (* a value returned from inside a tainted branch carries that taint
