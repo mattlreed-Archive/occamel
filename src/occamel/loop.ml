@@ -207,13 +207,15 @@ let run (type out)
    divergence: schema-hash or ctx-hash mismatch, different tool, different
    args, trace exhaustion. Deterministic tests of nondeterministic systems.
 
-   SECURITY (F4, §13.7): this is PURE replay — no live tool ever runs, and a
+   SECURITY (§13.7): this is PURE replay — no live tool ever runs, and a
    recorded approval is REPLAYED, not re-prompted. That is safe only because
    nothing here authorizes a real side effect. Do NOT build "replay to event k,
-   then go live" (§9 time-travel) on this function: replay-into-live must first
-   verify a keyed signature over the trace and re-invoke the approval handler
-   (and, in strict mode, admission). Both are M4 work; hashes here are unkeyed
-   MD5 and integrity-only against accidental drift, not tampering. *)
+   then go live" (§9 time-travel) on this LOOP-mode function. Strict mode has a
+   proper replay-into-live seam (Strict_run.replay_then_live): it verifies a
+   keyed HMAC over the trace (Trace.load_verified), re-runs admission, and
+   re-prompts the live approver for the live tail. A loop-mode equivalent would
+   need the same treatment; the ctx/schema hashes here are unkeyed and
+   integrity-only against accidental drift, not tampering. *)
 
 type replay_error =
   [ `Trace_exhausted

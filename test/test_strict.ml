@@ -155,6 +155,10 @@ let () =
    results by swapping the extract stub). *)
 
 let () =
+  (* The soundness contract: [analyze]/admit and [run] share control_taint, so
+     an admitted plan must never hit a denied sink at runtime — for ANY control
+     path. The battery includes untrusted-scrutinee If and Foreach so the
+     shared taint helper is exercised on both walks. *)
   let plans : Pl.t list =
     [
       [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/a") ] }; Return (Var "d") ];
@@ -164,6 +168,21 @@ let () =
              then_ = [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/a") ] };
                        Return (Var "d") ];
              else_ = [ Return (Lit "n") ] };
+        Return (Lit "done") ];
+      (* untrusted If scrutinee: admission taints the body, so a trusted-only
+         sink inside would be denied at admission — the plan below stays benign
+         (web_search in the body) and must run without a denied sink *)
+      [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+        If { cond = Var "r";
+             then_ = [ Call { bind = "s"; tool = "web_search"; args = [ ("query", Lit "x") ] };
+                       Return (Var "s") ];
+             else_ = [ Return (Lit "n") ] };
+        Return (Lit "done") ];
+      (* untrusted Foreach over an extraction: benign body, must run clean *)
+      [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+        Extract { bind = "items"; source = Var "r"; schema = None; question = "list" };
+        Foreach { bind = "it"; over = Var "items";
+                  body = [ Call { bind = "s"; tool = "web_search"; args = [ ("query", Var "it") ] } ] };
         Return (Lit "done") ];
     ]
   in

@@ -1,18 +1,18 @@
 (* Strict mode (design doc §6.2–§6.4): the plan interpreter, the provenance-
    tracking executor, sink policies, and plan admission.
 
-   The plan AST is Plan.t (Call/Extract/If/Return over Var/Lit), reused from
-   M0. What strict mode adds: every runtime binding carries Prov.t; every
+   The plan AST is Plan.t (Call/Extract/If/Foreach/Return over Var/Lit). What
+   strict mode adds: every runtime binding carries Prov.t; every
    capability-bearing sink is checked against a policy before execution; and
    the whole thing is analyzed statically (admission) before anything runs.
 
-   M3 scope note: Foreach (§5.2) is deferred to M3b — it needs a list-valued
-   runtime model the current string-valued environment doesn't have, and its
-   taint story (loop-var provenance joins the iterated source) is mechanically
-   the If case. Deferring keeps the security core — the part the thesis rests
-   on — clean rather than rushing the one construct where taint matters most.
-   Tracked in docs/research/m3-notes.md; the design doc §5.2/§11 already list
-   it, so no doc change, just a scoped-in-M3b note. *)
+   The file has two interpreters that MUST agree: [analyze] (static, over
+   worst-case provenance — admission) and [run] (dynamic, over real values).
+   Admission is a sound over-approximation of runtime, so the two share the
+   provenance formulas — notably [control_taint] below, used by both, so a
+   change to taint can't make them diverge. The differential test in
+   test_strict.ml guards this: any admitted plan must never hit a denied sink
+   at runtime. *)
 
 (* ---------- runtime values ---------- *)
 
@@ -120,6 +120,15 @@ let declared_fields (s : tool_spec) : string list option =
       | Some (`Assoc props) -> Some (List.map fst props)
       | _ -> None)
   | _ -> None
+
+(* Control-flow taint (§6.2), shared by BOTH walks (analyze and run) so they
+   can never disagree. A branch/loop whose scrutinee is untrusted taints
+   everything executed inside it: the taint is the outer taint, plus — when the
+   scrutinee is untrusted — a Branch source carrying the scrutinee's provenance.
+   [site] is "if" or "foreach" (names the construct in the source set). *)
+let control_taint ~(outer : Prov.t) ~(site : Prov.site) (scrutinee : Prov.t) : Prov.t =
+  if Prov.is_trusted scrutinee then outer
+  else Prov.add_branch site (Prov.join outer scrutinee)
 
 (* ---------- static provenance walk / admission (§6.4) ---------- *)
 
@@ -246,28 +255,18 @@ let analyze (reg : registry) (plan : Plan.t) : report =
             in
             (bind, p) :: env
         | Plan.If { cond; then_; else_ } ->
-            let cond_prov = prov_of_expr env cond in
-            (* control-flow taint: if the condition is untrusted, everything
-               executed in either branch is attacker-influenced (§6.2) *)
-            let taint =
-              if Prov.is_trusted cond_prov then branch_taint
-              else Prov.add_branch "if" (Prov.join branch_taint cond_prov)
-            in
+            let taint = control_taint ~outer:branch_taint ~site:"if" (prov_of_expr env cond) in
             let _ = walk env ~branch_taint:taint then_ in
             let _ = walk env ~branch_taint:taint else_ in
             (* branch-bound names don't escape (enforced by Plan scoping), so
                env is unchanged after the If *)
             env
         | Plan.Foreach { bind; over; body } ->
-            (* per-element taint: iterating over untrusted data means both the
-               loop variable and the loop body are attacker-influenced (in
-               count and content) — same as the If case, applied to the body
-               (§6.2, M3b). The loop var inherits [over]'s provenance. *)
+            (* iterating over untrusted data taints the loop var AND the body
+               (count and content are attacker-influenced) — the If case per
+               element. The loop var inherits [over]'s provenance. *)
             let over_prov = prov_of_expr env over in
-            let taint =
-              if Prov.is_trusted over_prov then branch_taint
-              else Prov.add_branch "foreach" (Prov.join branch_taint over_prov)
-            in
+            let taint = control_taint ~outer:branch_taint ~site:"foreach" over_prov in
             let elem_prov = Prov.join taint over_prov in
             let _ = walk ((bind, elem_prov) :: env) ~branch_taint:taint body in
             (* body binds (incl. [bind]) don't escape the loop *)
@@ -452,10 +451,7 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             walk ((bind, { data; prov }) :: env) ~branch_taint rest
         | Plan.If { cond; then_; else_ } ->
             let* c = value_of_expr env cond in
-            let taint =
-              if Prov.is_trusted c.prov then branch_taint
-              else Prov.add_branch "if" (Prov.join branch_taint c.prov)
-            in
+            let taint = control_taint ~outer:branch_taint ~site:"if" c.prov in
             (* evidence semantics: non-empty, not obviously negative -> then *)
             let truthy =
               let d = String.lowercase_ascii (String.trim c.data) in
@@ -468,10 +464,7 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             | None -> walk env ~branch_taint rest)
         | Plan.Foreach { bind; over; body } ->
             let* ov = value_of_expr env over in
-            let taint =
-              if Prov.is_trusted ov.prov then branch_taint
-              else Prov.add_branch "foreach" (Prov.join branch_taint ov.prov)
-            in
+            let taint = control_taint ~outer:branch_taint ~site:"foreach" ov.prov in
             (* [over]'s data is a JSON array; iterate its string elements. A
                non-array is a runtime error. *)
             let* elements =
