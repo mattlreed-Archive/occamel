@@ -235,7 +235,9 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             | None -> walk env ~branch_taint rest)
         | Plan.Return e ->
             let* v = value_of_expr env e in
-            Ok (Some v, env))
+            (* a value returned from inside a tainted branch carries that taint
+               in its reported provenance (accuracy for traces / M4 approval) *)
+            Ok (Some { v with prov = Prov.join branch_taint v.prov }, env))
   in
   let* result, _ = walk [] ~branch_taint:Prov.empty plan in
   match result with Some v -> Ok v | None -> Error No_return
