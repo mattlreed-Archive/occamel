@@ -1,7 +1,10 @@
 (* M0 measurement runner: capability probe, then the 15-task planning eval,
    per model. Writes one JSONL record per task to docs/research/m0-raw/. *)
 
-let base_url = "http://localhost:11434/v1"
+(* 127.0.0.1, not localhost: eio resolves localhost to ::1 first and does not
+   fall back across address families; Ollama binds IPv4 only. A real quirk
+   for the §B.1 table. *)
+let base_url = "http://127.0.0.1:11434/v1"
 
 type mconf = {
   label : string;
