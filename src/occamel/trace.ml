@@ -142,30 +142,97 @@ let event_of_json (json : Yojson.Safe.t) : (event, string) result =
       Ok (Note text)
   | other -> Error (Printf.sprintf "trace event: unknown kind %S" other)
 
+(* ---------- redaction (§13.7) ---------- *)
+
+(* User-registered scrubbers run over every string field at WRITE time, so
+   secrets/PII never hit disk. Secret.t values are unserializable by
+   construction (§13.9), but free strings (tool args/results, extraction
+   output) can still carry sensitive data; scrubbers are the defense. *)
+let scrubbers : (string -> string) list ref = ref []
+let register_scrubber f = scrubbers := f :: !scrubbers
+let scrub s = List.fold_left (fun s f -> f s) s !scrubbers
+
+let rec scrub_json : Yojson.Safe.t -> Yojson.Safe.t = function
+  | `String s -> `String (scrub s)
+  | `List l -> `List (List.map scrub_json l)
+  | `Assoc kvs -> `Assoc (List.map (fun (k, v) -> (k, scrub_json v)) kvs)
+  | other -> other
+
+let redact_event (e : event) : event =
+  match e with
+  | Ask_response r -> Ask_response { r with content = scrub r.content }
+  | Tool_call r -> Tool_call { r with args = scrub_json r.args; result = scrub_json r.result }
+  | Tool_failed r -> Tool_failed { r with args = scrub_json r.args; error = scrub r.error }
+  | Extraction r -> Extraction { r with output = scrub r.output; question = scrub r.question }
+  | Note s -> Note (scrub s)
+  | (Plan_generated _ | Plan_admitted _ | Approval _) as e -> e
+
+(* ---------- integrity (§13.7, retires F4 integrity half) ----------
+   An HMAC over the exact serialized event lines. Written as a trailing
+   "#sig <hex>" line; verified before events are handed back on load. Keyed
+   (not the unkeyed MD5 that F4 flagged) — a tamperer without the key cannot
+   forge it. Key from OCCAMEL_TRACE_KEY; if unset, traces are written unsigned
+   and load accepts them (dev default) but reports [Unsigned]. *)
+
+let hmac ~key (payload : string) : string =
+  (* HMAC-MD5 via Digest — sufficient for tamper-evidence of a local artifact;
+     swap to a real MAC lib when one is a dep. Block size 64. *)
+  let block = 64 in
+  let key = if String.length key > block then Digest.string key else key in
+  let key = key ^ String.make (block - String.length key) '\000' in
+  let xor pad = String.map (fun c -> Char.chr (Char.code c lxor pad)) key in
+  let ipad = xor 0x36 and opad = xor 0x5c in
+  Digest.to_hex (Digest.string (opad ^ Digest.string (ipad ^ payload)))
+
+let trace_key () = Sys.getenv_opt "OCCAMEL_TRACE_KEY"
+
 let save (trace : t) (path : string) : unit =
+  let lines =
+    List.map (fun e -> Yojson.Safe.to_string (json_of_event (redact_event e))) trace
+  in
+  let payload = String.concat "\n" lines in
   let oc = open_out path in
-  List.iter (fun e -> output_string oc (Yojson.Safe.to_string (json_of_event e) ^ "\n")) trace;
+  List.iter (fun l -> output_string oc (l ^ "\n")) lines;
+  (match trace_key () with
+  | Some key -> output_string oc ("#sig " ^ hmac ~key payload ^ "\n")
+  | None -> ());
   close_out oc
 
-let load (path : string) : (t, string) result =
+type integrity = Verified | Unsigned | Bad_signature
+
+let load_checked (path : string) : (t * integrity, string) result =
   let ic = open_in path in
-  let rec go acc =
-    match input_line ic with
-    | line ->
-        if String.trim line = "" then go acc
-        else (
+  let data_lines = ref [] and sig_line = ref None in
+  (try
+     while true do
+       let line = input_line ic in
+       if String.length line >= 5 && String.sub line 0 5 = "#sig " then
+         sig_line := Some (String.sub line 5 (String.length line - 5))
+       else if String.trim line <> "" then data_lines := line :: !data_lines
+     done
+   with End_of_file -> ());
+  close_in ic;
+  let data_lines = List.rev !data_lines in
+  let integrity =
+    match (!sig_line, trace_key ()) with
+    | Some s, Some key ->
+        if String.equal s (hmac ~key (String.concat "\n" data_lines)) then Verified
+        else Bad_signature
+    | None, _ | _, None -> Unsigned
+  in
+  if integrity = Bad_signature then Error "trace: signature verification failed (tampered?)"
+  else
+    let rec parse acc = function
+      | [] -> Ok (List.rev acc, integrity)
+      | line :: rest -> (
           match Yojson.Safe.from_string line with
-          | exception Yojson.Json_error m ->
-              close_in ic;
-              Error ("trace: invalid JSON line: " ^ m)
+          | exception Yojson.Json_error m -> Error ("trace: invalid JSON line: " ^ m)
           | json -> (
               match event_of_json json with
-              | Ok e -> go (e :: acc)
-              | Error m ->
-                  close_in ic;
-                  Error m))
-    | exception End_of_file ->
-        close_in ic;
-        Ok (List.rev acc)
-  in
-  go []
+              | Ok e -> parse (e :: acc) rest
+              | Error m -> Error m))
+    in
+    parse [] data_lines
+
+let load (path : string) : (t, string) result =
+  Result.map fst (load_checked path)

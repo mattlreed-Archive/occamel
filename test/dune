@@ -28,6 +28,11 @@
  (libraries occamel))
 
 (test
+ (name test_secret_trace)
+ (modules test_secret_trace)
+ (libraries occamel str unix))
+
+(test
  (name test_golden_strict)
  (modules test_golden_strict)
  (deps
