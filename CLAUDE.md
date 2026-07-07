@@ -35,6 +35,14 @@ stack multiple edits on top of a broken build — fix type errors as they appear
   surface at `/v1`). M0 model: `qwen3:14b`.
 - The design doc's example URL `http://ether:11434` refers to this machine
   (hostname `m4pro-ether`); use `localhost` in code and config.
+- Key operational findings (details + sources in `docs/research/m0-*.md`,
+  dated 2026-07-06): run qwen3 with thinking OFF (`/no_think`) — grammar
+  constraint and thinking mode conflict; use Qwen's sampling
+  (temp 0.7/top_p 0.8/top_k 20, never greedy) and `num_ctx >= 16384`; avoid
+  recursive `$ref`/`$defs` in schemas (buggy in llama.cpp/Ollama) — ship
+  depth-unrolled inline schemas and ALWAYS re-validate client-side; prefer
+  schema-constrained `format` output over Ollama's native `tools` path for
+  qwen3; probe capabilities per (model, backend) pair, not per endpoint.
 
 ## Conventions
 
