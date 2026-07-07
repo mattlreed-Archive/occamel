@@ -19,11 +19,18 @@ replan-on-Tool_error); M5 (two-mode injection/utility comparison —
 utility/degradation tradeoff measured). Each milestone has a
 `docs/research/m{N}-*.md` writeup + adversarial security review.
 
+**The 5 deferred items are now DONE** (each with an adversarial security
+review; `docs/research/deferred-security-review.md`): §13.3 capability axis +
+typed per-tool arg codecs (tool specs in `strict.ml`), channel-width into a
+typed plan-DSL `Extract` (§13.2), `Foreach` with per-element taint, and the
+`replay_then_live` approval seam (retires F4). The eventsource-parser port is
+merged (`occamel_wire`). Tutorials: `docs/tutorial-architecture.md` (why) and
+`docs/tutorial-technical.md` (how, module-by-module).
+
 **Remaining (require the user / not done autonomously):** opam publish +
-announce (external); merge the eventsource-parser branch
-`worktree-agent-a718f198300b01730`. **Deferred technical work:** full §13.3
-capability axis, typed per-tool arg codecs, wiring channel-width into a typed
-plan-DSL `Extract`, Foreach (M3b), replay-into-live approval seam.
+announce (external). **Possible next work:** wire real AgentDojo; a per-agent
+tool enum to retire the global `known_tools` in `plan.ml`; production planner
+reliability (M0's open risk); build on the merged SSE parser for streaming.
 
 ## Build & test
 
