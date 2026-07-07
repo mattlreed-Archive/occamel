@@ -63,14 +63,14 @@ let () =
       approve = (fun ~tool:_ ~field:_ ~value:_ -> true);
     }
   in
-  (match SR.replay_then_live ~path:unsigned ~cut:1 registry ~live:live_hooks with
+  (match SR.replay_then_live ~path:unsigned ~cut:1 registry ~approve_plan:(fun _ -> true) ~live:live_hooks with
   | Error (SR.Integrity _) -> ()
   | _ -> failwith "unsigned trace must be rejected by replay_then_live");
 
   (* cut=1: replay the first tool call (web_search) from the trace, run the
      send LIVE. The live send should fire (live hook records it). *)
   live_sends := [];
-  (match SR.replay_then_live ~path ~cut:1 registry ~live:live_hooks with
+  (match SR.replay_then_live ~path ~cut:1 registry ~approve_plan:(fun _ -> true) ~live:live_hooks with
   | Ok _ -> assert (!live_sends = [ "alice@x.com" ])  (* send ran live *)
   | Error _ -> failwith "verified replay_then_live should succeed");
 
@@ -78,7 +78,7 @@ let () =
   let c = In_channel.with_open_text path In_channel.input_all in
   let tampered = Str.replace_first (Str.regexp "alice") "evilx" c in
   Out_channel.with_open_text path (fun oc -> Out_channel.output_string oc tampered);
-  (match SR.replay_then_live ~path ~cut:1 registry ~live:live_hooks with
+  (match SR.replay_then_live ~path ~cut:1 registry ~approve_plan:(fun _ -> true) ~live:live_hooks with
   | Error (SR.Integrity _) -> ()
   | _ -> failwith "tampered trace must be rejected");
 
@@ -113,10 +113,24 @@ let () =
           Ok "live");
       approve = (fun ~tool:_ ~field:_ ~value:_ -> false)  (* live approver DENIES *) }
   in
-  (match SR.replay_then_live ~path:p2 ~cut:1 registry ~live:deny_hooks with
+  (match SR.replay_then_live ~path:p2 ~cut:1 registry ~approve_plan:(fun _ -> true) ~live:deny_hooks with
   | Error (SR.Replay (SR.Exec_replay (St.Approval_denied _))) -> assert (!denied_sends = [])
   | Ok _ -> failwith "live send must be blocked by the denying live approver"
   | Error _ -> failwith "expected approval-denied, not another error");
+
+  (* MEDIUM-1: denying the whole-plan approval for the live tail stops the run
+     before any live sink; no live send occurs *)
+  denied_sends := [];
+  (match SR.replay_then_live ~path:p2 ~cut:1 registry ~approve_plan:(fun _ -> false)
+           ~live:{ deny_hooks with approve = (fun ~tool:_ ~field:_ ~value:_ -> true) } with
+  | Error SR.Live_plan_denied -> assert (!denied_sends = [])
+  | _ -> failwith "denied whole-plan approval must stop the live continuation");
+
+  (* HIGH: cut exceeding the recorded tool count is rejected (no confused
+     deputy where a live call is gated by a replayed approval) *)
+  (match SR.replay_then_live ~path:p2 ~cut:99 registry ~approve_plan:(fun _ -> true) ~live:deny_hooks with
+  | Error (SR.Cut_exceeds_recording _) -> ()
+  | _ -> failwith "cut beyond the recording must be rejected");
   Sys.remove p2;
 
   print_endline "all replay-live tests passed"

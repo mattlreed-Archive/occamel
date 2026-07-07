@@ -176,6 +176,12 @@ let analyze (reg : registry) (plan : Plan.t) : report =
     match spec_of reg tool with
     | None -> reject site (Printf.sprintf "no tool spec for %S (default-deny)" tool)
     | Some spec ->
+        (* LOW footgun (review): a capability-bearing tool MUST declare a closed
+           arg schema, else the §3.3 choke point (field-name + value validation)
+           is skipped and a field-keyed policy can be dodged via an undeclared
+           field. Fail closed. *)
+        (if spec.ts_caps <> [] && declared_fields spec = None then
+           reject site (Printf.sprintf "%s is capability-bearing but declares no arg schema" tool));
         (* Item 1: capability footprint must be granted *)
         List.iter
           (fun c ->

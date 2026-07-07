@@ -236,10 +236,24 @@ let replay ~(trace : Trace.t) (registry : Strict.registry) :
      prefix, never to authorize a live action. *)
 type live_error =
   | Integrity of string  (* unsigned / tampered / unreadable trace *)
+  | Cut_exceeds_recording of { cut : int; recorded : int }
+  | Truncated_prefix  (* the replay window needs more recorded outputs than exist *)
+  | Live_plan_denied  (* the operator rejected the whole-plan approval for the live tail *)
   | Replay of replay_error
 
+(* [cut] leading tool calls are replayed from the (verified) trace; the rest
+   run live. Security contract (F4/§13.7):
+   - unsigned/tampered trace => rejected before anything runs (load_verified);
+   - the recorded plan re-passes admission;
+   - the whole-plan approval is RE-REQUESTED (approve_plan) for the live tail —
+     same primary control as a fresh run (§13.6), covering the live sinks;
+   - inside the replay window a missing recorded output FAILS CLOSED (never
+     silently falls through to live);
+   - past the window, tools run live and every dangerous sink re-prompts the
+     LIVE approver. Recorded approvals authorize nothing live. *)
 let replay_then_live ~(path : string) ~(cut : int) (registry : Strict.registry)
-    ~(live : Strict.exec_hooks) : (Strict.value, live_error) result =
+    ~(approve_plan : string -> bool) ~(live : Strict.exec_hooks) :
+    (Strict.value, live_error) result =
   match Trace.load_verified path with
   | Error e -> Error (Integrity e)
   | Ok trace -> (
@@ -251,54 +265,69 @@ let replay_then_live ~(path : string) ~(cut : int) (registry : Strict.registry)
           match Plan.of_json pj with
           | Error e -> Error (Replay (Bad_trace (Codec.error_to_string e)))
           | Ok plan -> (
-              match Strict.admit registry plan with
-              | Error rs -> Error (Replay (Readmit_failed rs))
-              | Ok () ->
-                  let tools =
-                    ref
-                      (List.filter_map
-                         (function
-                           | Trace.Tool_call { result = `String r; _ } -> Some (Ok r)
-                           | Trace.Tool_failed { error; _ } -> Some (Error error)
-                           | _ -> None)
-                         trace)
-                  in
-                  let extracts =
-                    ref
-                      (List.filter_map
-                         (function Trace.Extraction { output; _ } -> Some output | _ -> None)
-                         trace)
-                  in
-                  let approvals =
-                    ref
-                      (List.filter_map
-                         (function
-                           | Trace.Approval { decision; _ } ->
-                               Some (String.length decision >= 8 && String.sub decision 0 8 = "approved")
-                           | _ -> None)
-                         trace)
-                  in
-                  let pop r = match !r with [] -> None | x :: rest -> r := rest; Some x in
-                  let n = ref 0 in  (* tool-call index; < cut => replay, else live *)
-                  let hooks : Strict.exec_hooks =
-                    {
-                      run_tool =
-                        (fun ~tool ~args ->
-                          let replaying = !n < cut in
-                          incr n;
-                          if replaying then
-                            match pop tools with Some r -> r | None -> live.run_tool ~tool ~args
-                          else live.run_tool ~tool ~args);
-                      extract =
-                        (fun ~source ~question ->
-                          if !n < cut then match pop extracts with Some o -> o | None -> live.extract ~source ~question
-                          else live.extract ~source ~question);
-                      approve =
-                        (fun ~tool ~field ~value ->
-                          (* past the cut, ALWAYS re-prompt the live handler;
-                             recorded approvals authorize only the replayed prefix *)
-                          if !n < cut then match pop approvals with Some b -> b | None -> live.approve ~tool ~field ~value
-                          else live.approve ~tool ~field ~value);
-                    }
-                  in
-                  Result.map_error (fun e -> Replay (Exec_replay e)) (Strict.run registry hooks plan))))
+              let recorded_tools =
+                List.filter_map
+                  (function
+                    | Trace.Tool_call { result = `String r; _ } -> Some (Ok r)
+                    | Trace.Tool_failed { error; _ } -> Some (Error error)
+                    | _ -> None)
+                  trace
+              in
+              (* the replay window must be fully backed by recorded results *)
+              if cut > List.length recorded_tools then
+                Error (Cut_exceeds_recording { cut; recorded = List.length recorded_tools })
+              else
+                match Strict.admit registry plan with
+                | Error rs -> Error (Replay (Readmit_failed rs))
+                | Ok () ->
+                    (* MEDIUM-1 fix: re-request the whole-plan approval for the
+                       live continuation — same primary control as a fresh run *)
+                    let rep = Strict.analyze registry plan in
+                    if rep.needs_approval <> [] && not (approve_plan (Strict.render_report rep)) then
+                      Error Live_plan_denied
+                    else
+                      let tools = ref recorded_tools in
+                      let extracts =
+                        ref
+                          (List.filter_map
+                             (function Trace.Extraction { output; _ } -> Some output | _ -> None)
+                             trace)
+                      in
+                      let pop r = match !r with [] -> None | x :: rest -> r := rest; Some x in
+                      let n = ref 0 in  (* tool-call index *)
+                      let broken = ref false in  (* set on within-window exhaustion *)
+                      let hooks : Strict.exec_hooks =
+                        {
+                          run_tool =
+                            (fun ~tool ~args ->
+                              let replaying = !n < cut in
+                              incr n;
+                              if replaying then
+                                (* FAIL CLOSED inside the window — never live *)
+                                match pop tools with
+                                | Some r -> r
+                                | None ->
+                                    broken := true;
+                                    Error "replay: recorded prefix shorter than cut"
+                              else live.run_tool ~tool ~args);
+                          extract =
+                            (fun ~source ~question ->
+                              if !n < cut then
+                                match pop extracts with
+                                | Some o -> o
+                                | None ->
+                                    broken := true;
+                                    ""  (* flagged; run is failed below *)
+                              else live.extract ~source ~question);
+                          approve =
+                            (fun ~tool ~field ~value ->
+                              (* replay window: the step already ran and was
+                                 covered by the recorded whole-plan approval and
+                                 the integrity check, so auto-accept. Live tail:
+                                 re-prompt the LIVE approver — a recorded
+                                 approval authorizes nothing live. *)
+                              if !n < cut then true else live.approve ~tool ~field ~value);
+                        }
+                      in
+                      let r = Result.map_error (fun e -> Replay (Exec_replay e)) (Strict.run registry hooks plan) in
+                      if !broken then Error Truncated_prefix else r)))
