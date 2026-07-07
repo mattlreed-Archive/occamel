@@ -11,15 +11,15 @@ and milestones. Code follows the doc; if implementation reveals the doc is wrong
 **edit the doc deliberately (with a version bump + changelog line in the status
 header) in the same change** — never let them drift silently.
 
-**Current milestone: M4** (design doc §11). Done: M0 GO; M1 (ppx deriver,
-repair loop); M2 (loop mode: effects, replay, traces, approvals); M3 (strict
-mode: `Prov` lattice, `Trusted` boundary, `Strict` interpreter + admission +
-sink policies, `Strict_run` planner/replay). Each milestone has a
-`docs/research/m{N}-*.md` writeup + security review. M4 scope: Extract
-channel-width + unbounded-string lint (§13.2); whole-plan approval rendering
-(§13.6); replan-on-`Tool_error` (§6.5); `Secret.t` + trace redaction (§13.9);
-trace HMAC signing (retires F4). Deferred to M5: full §13.3 capability axis,
-typed per-tool arg codecs, Foreach (M3b).
+**Current milestone: M5 — evaluation** (design doc §11). Done: M0 GO; M1 (ppx
+deriver, repair loop); M2 (loop mode); M3 (strict mode: provenance, admission,
+sink policies); M4 (Secret.t, trace signing/redaction, whole-plan approval,
+channel-width, replan-on-Tool_error). Each has a `docs/research/m{N}-*.md`
+writeup + security review. M5: the two-mode (loop vs strict) utility +
+injection-resistance comparison on an AgentDojo-inspired suite — the project's
+headline artifact. Do NOT autonomously opam-publish or announce (external).
+Deferred: full §13.3 capability axis, typed per-tool arg codecs, Foreach,
+replay-into-live approval seam.
 
 ## Build & test
 
