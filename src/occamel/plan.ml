@@ -20,9 +20,9 @@ type t = step list
 (* M0: single tool, fixed here. Post-M0 the enum comes from the registry. *)
 let known_tools = [ "web_search" ]
 
-type error = { path : string; msg : string }
+type error = Codec.error = { path : string; msg : string }
 
-let error_to_string { path; msg } = Printf.sprintf "%s: %s" path msg
+let error_to_string = Codec.error_to_string
 
 (* ---------- JSON schema (what the backend is asked to enforce) ---------- *)
 
@@ -140,35 +140,9 @@ let rec json_of_step = function
 let to_json (plan : t) : Yojson.Safe.t =
   `Assoc [ ("steps", `List (List.map json_of_step plan)) ]
 
-let ( let* ) = Result.bind
+open Codec
 
-let err path msg = Error { path; msg }
-
-let field path name = function
-  | `Assoc kvs -> (
-      match List.assoc_opt name kvs with
-      | Some v -> Ok v
-      | None -> err path (Printf.sprintf "missing field %S" name))
-  | _ -> err path "expected an object"
-
-let as_string path = function
-  | `String v -> Ok v
-  | _ -> err path "expected a string"
-
-let nonempty path v =
-  let* v = as_string path v in
-  if String.length v = 0 then err path "expected a non-empty string" else Ok v
-
-let as_list path = function
-  | `List v -> Ok v
-  | _ -> err path "expected an array"
-
-let no_extra_fields path allowed = function
-  | `Assoc kvs -> (
-      match List.find_opt (fun (k, _) -> not (List.mem k allowed)) kvs with
-      | Some (k, _) -> err path (Printf.sprintf "unexpected field %S" k)
-      | None -> Ok ())
-  | _ -> err path "expected an object"
+let nonempty = Codec.nonempty_string
 
 let expr_of_json path json =
   let* () = no_extra_fields path [ "kind"; "name"; "value" ] json in
@@ -192,13 +166,6 @@ let arg_of_json path json =
   let* value = field path "value" json in
   let* value = expr_of_json (path ^ ".value") value in
   Ok (name, value)
-
-let rec map_result f i path = function
-  | [] -> Ok []
-  | x :: rest ->
-      let* y = f (Printf.sprintf "%s[%d]" path i) x in
-      let* ys = map_result f (i + 1) path rest in
-      Ok (y :: ys)
 
 let rec step_of_json ~allow_if path json =
   let* op = field path "op" json in
