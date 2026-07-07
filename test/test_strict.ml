@@ -75,7 +75,7 @@ let () =
   (* delete with an extracted path: still untrusted -> rejected *)
   let extract_plan : Pl.t =
     [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "paths") ] };
-      Extract { bind = "p"; source = Var "r"; question = "which path?" };
+      Extract { bind = "p"; source = Var "r"; schema = None; question = "which path?" };
       Call { bind = "d"; tool = "delete"; args = [ ("path", Var "p") ] };
       Return (Var "d") ]
   in
@@ -219,7 +219,7 @@ let () =
      extractions with their provenance *)
   let send_plan : Pl.t =
     [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
-      Extract { bind = "e"; source = Var "r"; question = "who?" };
+      Extract { bind = "e"; source = Var "r"; schema = None; question = "who?" };
       Call { bind = "s"; tool = "send"; args = [ ("to", Var "e"); ("body", Lit "hi") ] };
       Return (Var "s") ]
   in
@@ -236,5 +236,33 @@ let () =
     let n = String.length re and h = String.length rendered in
     let rec go i = i + n <= h && (String.sub rendered i n = re || go (i + 1)) in
     go 0);
+
+  (* Item 3: channel-width lint. An untrusted extraction of UNBOUNDED width
+     (free-text, or a wide named schema) feeding a capability-bearing sink
+     yields an advisory lint; a NARROW (enum) extraction schema does not. *)
+  let sink_tool = S.tool ~name:"act" ~caps:[ S.Net ]
+      ~arg_schema:(S.obj_schema [ ("x", "string") ])
+      ~policy:(S.approve_if_untrusted ~fields:[ "x" ]) () in
+  (* free-text extraction (schema=None => unbounded) into a cap sink -> lint *)
+  let wide_reg = S.registry [ ws; sink_tool ] in
+  let wide_plan : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+      Extract { bind = "e"; source = Var "r"; schema = None; question = "?" };
+      Call { bind = "a"; tool = "act"; args = [ ("x", Var "e") ] };
+      Return (Var "a") ]
+  in
+  assert ((S.analyze wide_reg wide_plan).lints <> []);
+  (* same plan but a narrow (enum) extraction schema -> no lint *)
+  let enum_schema : Occamel.Schema.t =
+    `Assoc [ ("type", `String "string"); ("enum", `List [ `String "yes"; `String "no" ]) ]
+  in
+  let narrow_reg = S.registry ~extraction_schemas:[ ("yesno", enum_schema) ] [ ws; sink_tool ] in
+  let narrow_plan : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+      Extract { bind = "e"; source = Var "r"; schema = Some "yesno"; question = "?" };
+      Call { bind = "a"; tool = "act"; args = [ ("x", Var "e") ] };
+      Return (Var "a") ]
+  in
+  assert ((S.analyze narrow_reg narrow_plan).lints = []);
 
   print_endline "all strict tests passed"

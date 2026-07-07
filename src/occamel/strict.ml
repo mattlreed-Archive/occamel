@@ -87,11 +87,26 @@ let obj_schema (fields : (string * string) list) : Schema.t =
       ("additionalProperties", `Bool false);
     ]
 
-type registry = { specs : tool_spec list; granted : cap list }
+type registry = {
+  specs : tool_spec list;
+  granted : cap list;
+  extraction_schemas : (string * Schema.t) list;  (* named Extract schemas (Item 3) *)
+}
 
 (* granted defaults to all capabilities (convenience); a fail-closed registry
    passes ~granted explicitly so a tool's caps ⊄ granted is denied. *)
-let registry ?(granted = all_caps) specs = { specs; granted }
+let registry ?(granted = all_caps) ?(extraction_schemas = []) specs =
+  { specs; granted; extraction_schemas }
+
+(* channel width of a named extraction schema; a None ref or an unknown name is
+   an unbounded (free-text) channel — the honest default (§13.2). *)
+let extraction_width (reg : registry) (schema : string option) : Schema.width =
+  match schema with
+  | None -> Schema.Unbounded
+  | Some name -> (
+      match List.assoc_opt name reg.extraction_schemas with
+      | Some s -> Schema.channel_width s
+      | None -> Schema.Unbounded)
 
 let spec_of (reg : registry) (tool : string) : tool_spec option =
   List.find_opt (fun s -> s.ts_name = tool) reg.specs
@@ -130,13 +145,17 @@ type report = {
   rejections : rejection list;
   needs_approval : sink_summary list;
   extractions : (Prov.site * string * Prov.t) list;  (* site, question, source prov *)
+  lints : string list;  (* advisory §13.2 channel-width warnings *)
 }
 
 (* analyze: the single static walk. Records every rejection, every
-   Needs_approval sink, and every extraction with its source provenance.
-   [admit] is the boolean face of it. *)
+   Needs_approval sink, and every extraction with its source provenance, plus
+   advisory channel-width lints (Item 3/§13.2). [admit] is the boolean face. *)
 let analyze (reg : registry) (plan : Plan.t) : report =
   let rejections = ref [] and approvals = ref [] and extractions = ref [] in
+  let lints = ref [] in
+  (* extraction bind -> its declared schema name (for width lookup) *)
+  let ext_schema : (Prov.site, string option) Hashtbl.t = Hashtbl.create 8 in
   let reject site reason = rejections := { site; reason } :: !rejections in
   (* M5 fix: an unbound var is treated as UNTRUSTED, not empty/trusted, so
      admission is sound even if a caller hands us a plan that skipped
@@ -172,10 +191,26 @@ let analyze (reg : registry) (plan : Plan.t) : report =
                   reject site (Printf.sprintf "%s.%s is not a declared argument" tool field))
               args
         | None -> ());
+        let capability_bearing = spec.ts_caps <> [] in
         (* sink policy on each field's effective provenance *)
         List.iter
           (fun (field, e) ->
             let prov = Prov.join branch_taint (prov_of_expr env e) in
+            (* Item 3/§13.2 channel-width lint (advisory): an untrusted value
+               reaching a capability sink, derived from an unbounded-width
+               extraction, is a warning — narrow the extraction schema. *)
+            (if capability_bearing && not (Prov.is_trusted prov) then
+               List.iter
+                 (fun from ->
+                   match Hashtbl.find_opt ext_schema from with
+                   | Some schema_ref when extraction_width reg schema_ref = Schema.Unbounded ->
+                       lints :=
+                         Printf.sprintf
+                           "%s.%s receives unbounded-width extraction %S; narrow its schema (sec 13.2)"
+                           tool field from
+                         :: !lints
+                   | _ -> ())
+                 (Prov.extracted_froms prov));
             match spec.ts_policy field prov with
             | Allow -> ()
             | Needs_approval ->
@@ -195,8 +230,9 @@ let analyze (reg : registry) (plan : Plan.t) : report =
         | Plan.Call { bind; tool; args } ->
             check_call env ~branch_taint ~site:bind ~tool ~args;
             (bind, Prov.join branch_taint (Prov.tool_result bind)) :: env
-        | Plan.Extract { bind; source; question } ->
+        | Plan.Extract { bind; source; schema; question } ->
             let src_prov = prov_of_expr env source in
+            Hashtbl.replace ext_schema bind schema;
             extractions := (bind, question, Prov.join branch_taint src_prov) :: !extractions;
             let p =
               Prov.join branch_taint
@@ -231,6 +267,7 @@ let analyze (reg : registry) (plan : Plan.t) : report =
     rejections = List.rev !rejections;
     needs_approval = List.rev !approvals;
     extractions = List.rev !extractions;
+    lints = List.rev !lints;
   }
 
 let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
@@ -267,6 +304,8 @@ let render_report (rep : report) : string =
       add "  - %s asks %S of %s data\n" (escape_ascii site) (escape_ascii q)
         (if Prov.is_trusted prov then "trusted" else "untrusted"))
     rep.extractions;
+  if rep.lints <> [] then add "Channel-width warnings (sec 13.2):\n";
+  List.iter (fun l -> add "  ! %s\n" (escape_ascii l)) rep.lints;
   Buffer.contents b
 
 (* ---------- runtime executor (§6.2) ---------- *)
@@ -368,9 +407,24 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             in
             let v = { data = result; prov = Prov.join branch_taint (Prov.tool_result bind) } in
             walk ((bind, v) :: env) ~branch_taint rest
-        | Plan.Extract { bind; source; question } ->
+        | Plan.Extract { bind; source; schema; question } ->
             let* src = value_of_expr env source in
             let data = hooks.extract ~source:src ~question in
+            (* Item 3: if the extraction is typed, the output must conform to
+               the schema — bounds the channel at runtime even if the extractor
+               wasn't constrained-decoded. *)
+            let* () =
+              match schema with
+              | None -> Ok ()
+              | Some name -> (
+                  match List.assoc_opt name reg.extraction_schemas with
+                  | None -> Ok ()  (* unknown schema name: nothing to enforce *)
+                  | Some s -> (
+                      match Schema.validate s (`String data) with
+                      | Ok () -> Ok ()
+                      | Error m ->
+                          Error (Denied_sink { site = bind; reason = "extraction schema: " ^ m })))
+            in
             let prov =
               Prov.join branch_taint
                 (Prov.join src.prov (Prov.extracted ~from:bind ~schema:"extract"))

@@ -14,7 +14,7 @@ let sample : Occamel.Plan.t =
         tool = "web_search";
         args = [ ("query", Occamel.Plan.Lit "capital of France") ];
       };
-    Extract { bind = "e1"; source = Var "r1"; question = "Which city?" };
+    Extract { bind = "e1"; source = Var "r1"; schema = None; question = "Which city?" };
     If
       {
         cond = Var "e1";

@@ -196,7 +196,7 @@ let worstcase () =
   let benign_planner (_ : Occamel.Trusted.t) : (Occamel.Plan.t, string) result =
     Ok
       [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "tallest mountain") ] };
-        Extract { bind = "m"; source = Var "r"; question = "the mountain name" };
+        Extract { bind = "m"; source = Var "r"; schema = None; question = "the mountain name" };
         Return (Var "m") ]
   in
   let cfg_a : Occamel.Strict_run.config =
@@ -222,7 +222,7 @@ let worstcase () =
      admission must reject it — the policy backstop even if a send were planned. *)
   let hostile_plan : Occamel.Plan.t =
     [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "x") ] };
-      Extract { bind = "addr"; source = Var "r"; question = "recipient" };
+      Extract { bind = "addr"; source = Var "r"; schema = None; question = "recipient" };
       Call { bind = "s"; tool = "send_message"; args = [ ("to", Var "addr"); ("body", Lit "pwned") ] };
       Return (Var "s") ]
   in

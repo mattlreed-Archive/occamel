@@ -45,6 +45,11 @@ let add_branch site t = SS.add (Branch site) t
 let is_trusted (t : t) : bool =
   SS.for_all (function User | Static -> true | _ -> false) t
 
+(* the [from] site of every Extracted source — which extractions a value
+   derives from (used by the channel-width lint, §13.2). *)
+let extracted_froms (t : t) : string list =
+  SS.fold (fun s acc -> match s with Extracted { from; _ } -> from :: acc | _ -> acc) t []
+
 let source_to_string = function
   | User -> "user"
   | Static -> "static"

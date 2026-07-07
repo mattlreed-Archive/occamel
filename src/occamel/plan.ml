@@ -11,7 +11,9 @@ type expr =
 
 type step =
   | Call of { bind : string; tool : string; args : (string * expr) list }
-  | Extract of { bind : string; source : expr; question : string }
+  | Extract of { bind : string; source : expr; schema : string option; question : string }
+  (* [schema] names a registered extraction schema the extractor answers INTO
+     (§13.2 typed extraction). None = free-text (unbounded channel). *)
   | If of { cond : expr; then_ : step list; else_ : step list }
   | Return of expr
 
@@ -69,11 +71,13 @@ let schema : Yojson.Safe.t =
       [ "op"; "bind"; "tool"; "args" ]
   in
   let extract =
+    (* [schema] is an optional property (declared but not required) *)
     obj
       [
         ("op", tag "extract");
         ("bind", nonempty_string);
         ("source", expr);
+        ("schema", string_ty);
         ("question", nonempty_string);
       ]
       [ "op"; "bind"; "source"; "question" ]
@@ -122,14 +126,15 @@ let rec json_of_step = function
                    `Assoc [ ("name", `String name); ("value", json_of_expr v) ])
                  args) );
         ]
-  | Extract { bind; source; question } ->
+  | Extract { bind; source; schema; question } ->
       `Assoc
-        [
-          ("op", `String "extract");
-          ("bind", `String bind);
-          ("source", json_of_expr source);
-          ("question", `String question);
-        ]
+        ([
+           ("op", `String "extract");
+           ("bind", `String bind);
+           ("source", json_of_expr source);
+           ("question", `String question);
+         ]
+        @ match schema with Some s -> [ ("schema", `String s) ] | None -> [])
   | If { cond; then_; else_ } ->
       `Assoc
         [
@@ -189,14 +194,21 @@ let rec step_of_json ~allow_if path json =
       let* args = map_result arg_of_json 0 (path ^ ".args") args in
       Ok (Call { bind; tool; args })
   | "extract" ->
-      let* () = no_extra_fields path [ "op"; "bind"; "source"; "question" ] json in
+      let* () = no_extra_fields path [ "op"; "bind"; "source"; "schema"; "question" ] json in
       let* bind = field path "bind" json in
       let* bind = nonempty (path ^ ".bind") bind in
       let* source = field path "source" json in
       let* source = expr_of_json (path ^ ".source") source in
       let* question = field path "question" json in
       let* question = nonempty (path ^ ".question") question in
-      Ok (Extract { bind; source; question })
+      let* schema =
+        match field_opt path "schema" json with
+        | Ok (Some (`String s)) -> Ok (Some s)
+        | Ok None -> Ok None
+        | Ok (Some _) -> err ~code:Type_mismatch (path ^ ".schema") "expected a string"
+        | Error e -> Error e
+      in
+      Ok (Extract { bind; source; schema; question })
   | "return" ->
       let* () = no_extra_fields path [ "op"; "value" ] json in
       let* value = field path "value" json in
