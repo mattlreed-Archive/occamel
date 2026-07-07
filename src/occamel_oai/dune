@@ -1,0 +1,3 @@
+(library
+ (name occamel_oai)
+ (libraries cohttp-eio eio yojson http uri))
