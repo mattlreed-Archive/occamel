@@ -1,0 +1,7 @@
+(library
+ (name occamel_ppx)
+ (kind ppx_deriver)
+ (libraries ppxlib)
+ (ppx_runtime_libraries occamel yojson)
+ (preprocess
+  (pps ppxlib.metaquot)))

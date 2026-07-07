@@ -1,3 +1,11 @@
 (test
  (name test_occamel)
+ (modules test_occamel)
  (libraries occamel))
+
+(test
+ (name test_derive)
+ (modules test_derive)
+ (libraries occamel qcheck yojson)
+ (preprocess
+  (pps occamel_ppx)))

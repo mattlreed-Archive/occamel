@@ -19,6 +19,11 @@ let member name = function
   | `Assoc kvs -> List.assoc_opt name kvs
   | _ -> None
 
+(* Append extra keys (description, default, minimum, …) to an object schema.
+   Used by ppx-generated code to layer attribute metadata onto base schemas. *)
+let with_kvs (schema : t) (kvs : (string * Yojson.Safe.t) list) : t =
+  match schema with `Assoc l -> `Assoc (l @ kvs) | s -> s
+
 let rec validate (schema : t) (v : Yojson.Safe.t) : (unit, string) result =
   let ( let* ) = Result.bind in
   (* enum first: it constrains independently of type *)
