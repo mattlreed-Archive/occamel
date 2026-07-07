@@ -1,0 +1,4 @@
+{"event":"plan","prompt_hash":"5216ef556179773b88ddf880d15e726a","plan":{"steps":[{"op":"call","bind":"r1","tool":"web_search","args":[{"name":"query","value":{"kind":"lit","value":"tallest mountain in the world"}}]},{"op":"extract","bind":"mountain_name","source":{"kind":"var","name":"r1"},"question":"What is the name of the tallest mountain?"},{"op":"return","value":{"kind":"var","name":"mountain_name"}}]}}
+{"event":"admitted","verdict":"ok"}
+{"event":"tool","tool":"web_search","args_schema_hash":"strict","args":{"query":"tallest mountain in the world"},"result":"Top result: Mount Everest is the tallest mountain at 8,849 m.","ms":0}
+{"event":"extraction","site":"extract","question":"What is the name of the tallest mountain?","source_hash":"b6a3b9361245a2870a179366ca7a02cc","output":"Mount Everest","prov":["tool_result(r1)"]}

@@ -14,6 +14,16 @@ type event =
       schema_hash : string;
       content : string;  (* raw model output; re-parsed on replay *)
     }
+  (* strict-mode events (§9). Plan is stored via Plan.to_json. *)
+  | Plan_generated of { prompt_hash : string; plan : Yojson.Safe.t }
+  | Plan_admitted of { verdict : string (* "ok" | reasons joined *) }
+  | Extraction of {
+      site : string;
+      question : string;
+      source_hash : string;
+      output : string;
+      prov : Yojson.Safe.t;
+    }
   | Tool_call of {
       tool : string;
       args_schema_hash : string;
@@ -64,6 +74,21 @@ let json_of_event : event -> Yojson.Safe.t = function
   | Approval { tool; decision } ->
       `Assoc
         [ ("event", `String "approval"); ("tool", `String tool); ("decision", `String decision) ]
+  | Plan_generated { prompt_hash; plan } ->
+      `Assoc
+        [ ("event", `String "plan"); ("prompt_hash", `String prompt_hash); ("plan", plan) ]
+  | Plan_admitted { verdict } ->
+      `Assoc [ ("event", `String "admitted"); ("verdict", `String verdict) ]
+  | Extraction { site; question; source_hash; output; prov } ->
+      `Assoc
+        [
+          ("event", `String "extraction");
+          ("site", `String site);
+          ("question", `String question);
+          ("source_hash", `String source_hash);
+          ("output", `String output);
+          ("prov", prov);
+        ]
   | Note text -> `Assoc [ ("event", `String "note"); ("text", `String text) ]
 
 let event_of_json (json : Yojson.Safe.t) : (event, string) result =
@@ -98,6 +123,20 @@ let event_of_json (json : Yojson.Safe.t) : (event, string) result =
       let* tool = str "tool" in
       let* decision = str "decision" in
       Ok (Approval { tool; decision })
+  | "plan" ->
+      let* prompt_hash = str "prompt_hash" in
+      let plan = Option.value ~default:`Null (Schema.member "plan" json) in
+      Ok (Plan_generated { prompt_hash; plan })
+  | "admitted" ->
+      let* verdict = str "verdict" in
+      Ok (Plan_admitted { verdict })
+  | "extraction" ->
+      let* site = str "site" in
+      let* question = str "question" in
+      let* source_hash = str "source_hash" in
+      let* output = str "output" in
+      let prov = Option.value ~default:`Null (Schema.member "prov" json) in
+      Ok (Extraction { site; question; source_hash; output; prov })
   | "note" ->
       let* text = str "text" in
       Ok (Note text)

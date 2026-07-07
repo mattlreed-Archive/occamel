@@ -26,3 +26,10 @@
  (name test_strict)
  (modules test_strict)
  (libraries occamel))
+
+(test
+ (name test_golden_strict)
+ (modules test_golden_strict)
+ (deps
+  (glob_files_rec golden/*))
+ (libraries occamel))
