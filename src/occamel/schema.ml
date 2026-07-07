@@ -157,3 +157,60 @@ let complexity (schema : t) : int =
 
 (* Warning threshold used by the ppx; a guess to calibrate at M5 (§7.1). *)
 let warn_threshold = 24
+
+(* ---------- channel width (§13.2, the measured injection residual) ----------
+   When the quarantined extractor reads attacker-influenced text and answers
+   INTO a schema, the schema bounds how many bits the attacker can inject
+   through the extraction. bool = 1, enum of n = log2 n, unbounded string =
+   open pipe. Narrowing the extraction schema narrows the attack. *)
+
+type width = Bits of float | Unbounded
+
+let width_add a b =
+  match (a, b) with Unbounded, _ | _, Unbounded -> Unbounded | Bits x, Bits y -> Bits (x +. y)
+
+let width_max a b =
+  match (a, b) with
+  | Unbounded, _ | _, Unbounded -> Unbounded
+  | Bits x, Bits y -> Bits (Float.max x y)
+
+let log2 n = if n <= 1 then 0. else Float.log (float_of_int n) /. Float.log 2.
+
+let rec channel_width (schema : t) : width =
+  match member "enum" schema with
+  | Some (`List vals) -> Bits (log2 (List.length vals))
+  | _ -> (
+      match member "anyOf" schema with
+      | Some (`List arms) ->
+          (* a choice among arms (log2 #arms) plus the widest arm's payload *)
+          let payload = List.fold_left (fun acc a -> width_max acc (channel_width a)) (Bits 0.) arms in
+          width_add (Bits (log2 (List.length arms))) payload
+      | _ -> (
+          match member "type" schema with
+          | Some (`String "boolean") -> Bits 1.
+          | Some (`String "null") -> Bits 0.
+          | Some (`String "integer") -> (
+              match (member "minimum" schema, member "maximum" schema) with
+              | Some (`Int lo), Some (`Int hi) when hi >= lo -> Bits (log2 (hi - lo + 1))
+              | _ -> Unbounded)
+          | Some (`String "object") ->
+              let props = match member "properties" schema with Some (`Assoc p) -> p | _ -> [] in
+              List.fold_left (fun acc (_, p) -> width_add acc (channel_width p)) (Bits 0.) props
+          (* string (non-enum), number, array: an open channel *)
+          | _ -> Unbounded))
+
+let width_to_string = function
+  | Unbounded -> "unbounded"
+  | Bits b -> Printf.sprintf "%.1f bits" b
+
+(* The unbounded-string lint: an extraction from untrusted data, into a schema
+   with an unbounded channel, that will reach a capability-bearing sink, is a
+   warning with a named fix (narrow the schema). Returns None if safe. *)
+let extraction_lint ~(from_untrusted : bool) ~(reaches_sink : bool) (schema : t) :
+    string option =
+  if from_untrusted && reaches_sink && channel_width schema = Unbounded then
+    Some
+      "unbounded-width extraction from untrusted data reaches a capability \
+       sink; narrow the extraction schema (an enum/bool/bounded int) or route \
+       it through a refinement (§13.2)"
+  else None

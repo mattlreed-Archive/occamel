@@ -181,4 +181,21 @@ let () =
   expect_error "duplicate key"
     (search_args_of_json (json {|{"query":"a","query":"b","max_results":1,"site":null}|}));
 
+  (* §13.2 channel width: an enum is a narrow channel, a free string is open *)
+  (match Occamel.Schema.channel_width color_schema with
+  | Occamel.Schema.Bits b -> assert (b > 1.0 && b < 2.0)  (* log2 3 ≈ 1.58 *)
+  | Unbounded -> failwith "enum should be bounded");
+  (match Occamel.Schema.channel_width search_args_schema with
+  | Occamel.Schema.Unbounded -> ()  (* contains a free string field *)
+  | Bits _ -> failwith "free-string record should be unbounded");
+  (* the lint fires only for untrusted data into an unbounded schema reaching a sink *)
+  assert (
+    Occamel.Schema.extraction_lint ~from_untrusted:true ~reaches_sink:true search_args_schema
+    <> None);
+  assert (
+    Occamel.Schema.extraction_lint ~from_untrusted:true ~reaches_sink:true color_schema = None);
+  assert (
+    Occamel.Schema.extraction_lint ~from_untrusted:false ~reaches_sink:true search_args_schema
+    = None);
+
   print_endline "all derive tests passed"
