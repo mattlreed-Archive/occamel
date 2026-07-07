@@ -236,3 +236,14 @@ let load_checked (path : string) : (t * integrity, string) result =
 
 let load (path : string) : (t, string) result =
   Result.map fst (load_checked path)
+
+(* Strict loader for integrity-sensitive callers (e.g. any future
+   replay-into-live): REQUIRES a valid signature. Rejects both a tampered
+   trace and an unsigned one — closing the strip-the-signature downgrade where
+   an attacker removes #sig to turn Verified into silently-accepted Unsigned.
+   Needs OCCAMEL_TRACE_KEY set. *)
+let load_verified (path : string) : (t, string) result =
+  match load_checked path with
+  | Ok (t, Verified) -> Ok t
+  | Ok (_, Unsigned) -> Error "trace: unsigned (integrity required)"
+  | Ok (_, Bad_signature) | Error _ -> Error "trace: signature verification failed"

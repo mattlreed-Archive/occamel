@@ -58,6 +58,19 @@ let () =
   | Error _ -> ()
   | Ok _ -> failwith "tampered trace must fail verification");
 
+  (* re-sign a clean trace, then strip the #sig line: load_verified must
+     reject the downgrade even though load_checked would accept it as Unsigned *)
+  let s2 = Filename.temp_file "occ" ".strace" in
+  Tr.save [ Tr.Note "a"; Tr.Note "b" ] s2;
+  (match Tr.load_verified s2 with Ok _ -> () | Error _ -> failwith "signed should verify");
+  let c = In_channel.with_open_text s2 In_channel.input_all in
+  let stripped = Str.global_replace (Str.regexp "#sig [a-f0-9]+\n") "" c in
+  Out_channel.with_open_text s2 (fun oc -> Out_channel.output_string oc stripped);
+  (match Tr.load_verified s2 with
+  | Error _ -> ()  (* downgrade rejected *)
+  | Ok _ -> failwith "stripped-signature downgrade must be rejected by load_verified");
+
   Sys.remove file;
   Sys.remove signed;
+  Sys.remove s2;
   print_endline "all secret/trace tests passed"
