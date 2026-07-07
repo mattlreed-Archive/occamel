@@ -9,3 +9,8 @@
  (libraries occamel qcheck yojson)
  (preprocess
   (pps occamel_ppx)))
+
+(test
+ (name test_replay)
+ (modules test_replay)
+ (libraries occamel occamel_examples yojson))

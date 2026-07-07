@@ -56,8 +56,8 @@ let unsupported ~loc what =
 
 let names_of td =
   match td.ptype_name.txt with
-  | "t" -> ("schema", "of_json", "of_json_at", "to_json")
-  | n -> (n ^ "_schema", n ^ "_of_json", n ^ "_of_json_at", n ^ "_to_json")
+  | "t" -> ("schema", "of_json", "of_json_at", "to_json", "typed")
+  | n -> (n ^ "_schema", n ^ "_of_json", n ^ "_of_json_at", n ^ "_to_json", n ^ "_typed")
 
 let derived_names_of_lident ~loc (lid : Longident.t) =
   let mk suffix =
@@ -498,7 +498,7 @@ let gen_td ~loc ~parse (td : type_declaration) : structure =
   (match td.ptype_params with
   | [] -> ()
   | _ -> unsupported ~loc "a parameterized type");
-  let schema_n, of_json_n, of_json_at_n, to_json_n = names_of td in
+  let schema_n, of_json_n, of_json_at_n, to_json_n, typed_n = names_of td in
   let schema, decoder, encoder =
     match td.ptype_kind with
     | Ptype_record lds -> gen_record ~loc td lds
@@ -552,6 +552,15 @@ let gen_td ~loc ~parse (td : type_declaration) : structure =
         let [%p Ast.pvar ~loc of_json_n] =
          fun json -> [%e Ast.evar ~loc of_json_at_n] "$" json];
       [%stri let [%p Ast.pvar ~loc to_json_n] = [%e encoder]];
+      [%stri
+        let [%p Ast.pvar ~loc typed_n] =
+          {
+            Occamel.Schema.name = [%e Ast.estring ~loc td.ptype_name.txt];
+            schema = [%e Ast.evar ~loc schema_n];
+            parse =
+              (fun s ->
+                Occamel.Codec.of_string ~of_json:[%e Ast.evar ~loc of_json_n] s);
+          }];
     ]
 
 let str_gen ~ctxt (rec_flag, tds) parse =

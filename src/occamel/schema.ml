@@ -24,6 +24,17 @@ let member name = function
 let with_kvs (schema : t) (kvs : (string * Yojson.Safe.t) list) : t =
   match schema with `Assoc l -> `Assoc (l @ kvs) | s -> s
 
+(* A schema paired with its parser — what Ask (§6.1) is typed by. The ppx
+   generates a [<name>_typed] value per derived type. *)
+type 'a typed = {
+  name : string;
+  schema : t;
+  parse : string -> ('a, Codec.error) result;
+}
+
+let hash (schema : t) : string =
+  Digest.to_hex (Digest.string (Yojson.Safe.to_string schema))
+
 let rec validate (schema : t) (v : Yojson.Safe.t) : (unit, string) result =
   let ( let* ) = Result.bind in
   (* enum first: it constrains independently of type *)

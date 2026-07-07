@@ -1,0 +1,5 @@
+(library
+ (name occamel_examples)
+ (libraries occamel yojson)
+ (preprocess
+  (pps occamel_ppx)))

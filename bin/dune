@@ -1,3 +1,3 @@
 (executables
- (names m0_eval m1_repair)
- (libraries occamel occamel_oai eio_main yojson))
+ (names m0_eval m1_repair m2_agent)
+ (libraries occamel occamel_oai occamel_examples eio_main yojson))
