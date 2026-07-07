@@ -38,6 +38,11 @@
  (libraries occamel))
 
 (test
+ (name test_replay_live)
+ (modules test_replay_live)
+ (libraries occamel str unix))
+
+(test
  (name test_golden_strict)
  (modules test_golden_strict)
  (deps

@@ -223,3 +223,82 @@ let replay ~(trace : Trace.t) (registry : Strict.registry) :
                 }
               in
               Result.map_error (fun e -> Exec_replay e) (Strict.run registry hooks plan)))
+
+(* ---------- replay-into-live (§9 / §13.7, Item 5) ----------
+   Resume a recorded run: replay the first [cut] tool calls from the trace,
+   then execute the remainder LIVE. The security contract (the other half of
+   F4):
+   - the trace is loaded via Trace.load_verified, so an unsigned or tampered
+     trace is rejected before anything runs (a key must be configured);
+   - the recorded plan re-passes admission;
+   - past the cut, tools run live and every dangerous sink re-prompts the LIVE
+     approval handler — recorded approvals are used only for the replayed
+     prefix, never to authorize a live action. *)
+type live_error =
+  | Integrity of string  (* unsigned / tampered / unreadable trace *)
+  | Replay of replay_error
+
+let replay_then_live ~(path : string) ~(cut : int) (registry : Strict.registry)
+    ~(live : Strict.exec_hooks) : (Strict.value, live_error) result =
+  match Trace.load_verified path with
+  | Error e -> Error (Integrity e)
+  | Ok trace -> (
+      match
+        List.find_map (function Trace.Plan_generated { plan; _ } -> Some plan | _ -> None) trace
+      with
+      | None -> Error (Replay Replan_needed)
+      | Some pj -> (
+          match Plan.of_json pj with
+          | Error e -> Error (Replay (Bad_trace (Codec.error_to_string e)))
+          | Ok plan -> (
+              match Strict.admit registry plan with
+              | Error rs -> Error (Replay (Readmit_failed rs))
+              | Ok () ->
+                  let tools =
+                    ref
+                      (List.filter_map
+                         (function
+                           | Trace.Tool_call { result = `String r; _ } -> Some (Ok r)
+                           | Trace.Tool_failed { error; _ } -> Some (Error error)
+                           | _ -> None)
+                         trace)
+                  in
+                  let extracts =
+                    ref
+                      (List.filter_map
+                         (function Trace.Extraction { output; _ } -> Some output | _ -> None)
+                         trace)
+                  in
+                  let approvals =
+                    ref
+                      (List.filter_map
+                         (function
+                           | Trace.Approval { decision; _ } ->
+                               Some (String.length decision >= 8 && String.sub decision 0 8 = "approved")
+                           | _ -> None)
+                         trace)
+                  in
+                  let pop r = match !r with [] -> None | x :: rest -> r := rest; Some x in
+                  let n = ref 0 in  (* tool-call index; < cut => replay, else live *)
+                  let hooks : Strict.exec_hooks =
+                    {
+                      run_tool =
+                        (fun ~tool ~args ->
+                          let replaying = !n < cut in
+                          incr n;
+                          if replaying then
+                            match pop tools with Some r -> r | None -> live.run_tool ~tool ~args
+                          else live.run_tool ~tool ~args);
+                      extract =
+                        (fun ~source ~question ->
+                          if !n < cut then match pop extracts with Some o -> o | None -> live.extract ~source ~question
+                          else live.extract ~source ~question);
+                      approve =
+                        (fun ~tool ~field ~value ->
+                          (* past the cut, ALWAYS re-prompt the live handler;
+                             recorded approvals authorize only the replayed prefix *)
+                          if !n < cut then match pop approvals with Some b -> b | None -> live.approve ~tool ~field ~value
+                          else live.approve ~tool ~field ~value);
+                    }
+                  in
+                  Result.map_error (fun e -> Replay (Exec_replay e)) (Strict.run registry hooks plan))))
