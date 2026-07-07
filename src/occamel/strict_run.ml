@@ -121,6 +121,38 @@ let run (cfg : config) (goal : Trusted.t) : (Strict.value, error) result * Trace
           in
           finish (Result.map_error (fun e -> Exec e) (Strict.run cfg.registry hooks plan)))
 
+(* ---------- replan on Tool_error (§6.5) ----------
+   A harness-generated tool failure (timeout, not-found, policy denial) is
+   Trusted by construction — it is NOT attacker-readable content — so the
+   planner may safely revise the plan in light of it. The safety hinge: we feed
+   the planner ONLY a static note naming the failed tool, never the error
+   STRING (a tool could smuggle attacker content into its error message).
+   Content-dependent adaptation is not replanning — it must be an If over an
+   Extract-into-a-narrow-schema inside the plan, where the channel width is
+   bounded and visible at admission (§13.2).
+
+   Denied sinks, approval denials, unbound vars, and no-return are NOT
+   transient tool failures and are never replanned. *)
+let run_with_replan ?(max_replans = 1) (cfg : config) (goal : Trusted.t) :
+    (Strict.value, error) result * Trace.t =
+  let rec attempt n goal acc =
+    let result, events = run cfg goal in
+    let acc = acc @ events in
+    match result with
+    | Error (Exec (Strict.Tool_error { tool; _ })) when n < max_replans ->
+        (* static, trusted revision note — no tool content crosses to the planner *)
+        let note =
+          Trusted.of_static
+            (Printf.sprintf
+               "\n\n(Revision: the tool %S failed in the previous plan. Produce \
+                a different plan that does not depend on it succeeding.)"
+               tool)
+        in
+        attempt (n + 1) (Trusted.concat [ goal; note ]) acc
+    | _ -> (result, acc)
+  in
+  attempt 0 goal []
+
 (* ---------- deterministic replay (§9) ----------
    Re-runs the recorded plan through admission and execution, but answers every
    tool call and extraction from the trace. Fails loudly if the recorded plan
