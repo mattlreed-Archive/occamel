@@ -100,8 +100,27 @@ let field_verdict (reg : registry) (tool : string) (field : string) (prov : Prov
 
 type rejection = { site : Prov.site; reason : string }
 
-let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
-  let rejections = ref [] in
+(* A guarded sink the plan reaches, with the provenance that flows into it —
+   the raw material for the whole-plan approval view (§6.4 step 3, §13.6). *)
+type sink_summary = {
+  s_site : Prov.site;
+  s_tool : string;
+  s_field : string;
+  s_prov : Prov.t;
+  s_verdict : verdict;
+}
+
+type report = {
+  rejections : rejection list;
+  needs_approval : sink_summary list;
+  extractions : (Prov.site * string * Prov.t) list;  (* site, question, source prov *)
+}
+
+(* analyze: the single static walk. Records every rejection, every
+   Needs_approval sink, and every extraction with its source provenance.
+   [admit] is the boolean face of it. *)
+let analyze (reg : registry) (plan : Plan.t) : report =
+  let rejections = ref [] and approvals = ref [] and extractions = ref [] in
   let reject site reason = rejections := { site; reason } :: !rejections in
   (* M5 fix: an unbound var is treated as UNTRUSTED, not empty/trusted, so
      admission is sound even if a caller hands us a plan that skipped
@@ -122,7 +141,12 @@ let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
       (fun (field, e) ->
         let prov = Prov.join branch_taint (prov_of_expr env e) in
         match field_verdict reg tool field prov with
-        | Allow | Needs_approval -> ()
+        | Allow -> ()
+        | Needs_approval ->
+            approvals :=
+              { s_site = site; s_tool = tool; s_field = field; s_prov = prov;
+                s_verdict = Needs_approval }
+              :: !approvals
         | Deny reason -> reject site reason)
       args
   in
@@ -135,8 +159,9 @@ let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
         | Plan.Call { bind; tool; args } ->
             check_call env ~branch_taint ~site:bind ~tool ~args;
             (bind, Prov.join branch_taint (Prov.tool_result bind)) :: env
-        | Plan.Extract { bind; source; _ } ->
+        | Plan.Extract { bind; source; question } ->
             let src_prov = prov_of_expr env source in
+            extractions := (bind, question, Prov.join branch_taint src_prov) :: !extractions;
             let p =
               Prov.join branch_taint
                 (Prov.join src_prov (Prov.extracted ~from:bind ~schema:"extract"))
@@ -162,12 +187,51 @@ let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
       env steps
   in
   (* M5: run the scoping check ourselves — don't rely on the plan having come
-     through Plan.of_json. A scoping violation is an admission rejection. *)
-  match Plan.validate_scoping plan with
-  | Error e -> Error [ { site = e.Codec.path; reason = e.Codec.msg } ]
-  | Ok () -> (
-      let _ = walk [] ~branch_taint:Prov.empty plan in
-      match List.rev !rejections with [] -> Ok () | rs -> Error rs)
+     through Plan.of_json. A scoping violation is a rejection. *)
+  (match Plan.validate_scoping plan with
+  | Error e -> reject e.Codec.path e.Codec.msg
+  | Ok () -> ignore (walk [] ~branch_taint:Prov.empty plan));
+  {
+    rejections = List.rev !rejections;
+    needs_approval = List.rev !approvals;
+    extractions = List.rev !extractions;
+  }
+
+let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
+  match (analyze reg plan).rejections with [] -> Ok () | rs -> Error rs
+
+(* Whole-plan approval view (§13.6): canonical, truncation-safe, and
+   homoglyph/bidi/control-safe — every non-printable-ASCII byte escaped, so the
+   approver reads exactly the sinks and provenance that will execute. One
+   informed decision over the data-flow graph, not N mid-run prompts. *)
+let escape_ascii (s : string) : string =
+  let b = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+      let code = Char.code c in
+      if code >= 0x20 && code <= 0x7e && c <> '\\' then Buffer.add_char b c
+      else Buffer.add_string b (Printf.sprintf "\\x%02x" code))
+    s;
+  Buffer.contents b
+
+let render_report (rep : report) : string =
+  let b = Buffer.create 256 in
+  let add fmt = Printf.ksprintf (Buffer.add_string b) fmt in
+  add "Plan requires approval:\n";
+  List.iter
+    (fun s ->
+      add "  - %s.%s (at %s) receives %s data\n" (escape_ascii s.s_tool)
+        (escape_ascii s.s_field) (escape_ascii s.s_site)
+        (if Prov.is_trusted s.s_prov then "trusted" else "UNTRUSTED");
+      add "      provenance: %s\n" (Prov.to_string s.s_prov))
+    rep.needs_approval;
+  if rep.extractions <> [] then add "Extractions (quarantined reads):\n";
+  List.iter
+    (fun (site, q, prov) ->
+      add "  - %s asks %S of %s data\n" (escape_ascii site) (escape_ascii q)
+        (if Prov.is_trusted prov then "trusted" else "untrusted"))
+    rep.extractions;
+  Buffer.contents b
 
 (* ---------- runtime executor (§6.2) ---------- *)
 

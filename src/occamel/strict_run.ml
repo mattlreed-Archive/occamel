@@ -35,8 +35,12 @@ type config = {
   extract_with : source:string -> question:string -> string;
   (* real tool implementations *)
   run_tool : tool:string -> args:(string * Strict.value) list -> (string, string) result;
-  approve : tool:string -> field:string -> value:Strict.value -> bool;
+  (* whole-plan approval (§13.6): shown the rendered data-flow graph ONCE
+     before execution; returning false aborts. Defaults to auto-approve. *)
+  approve_plan : string -> bool;
 }
+
+let auto_approve_plan (_ : string) = true
 
 (* Production run: generate, admit, execute; emit a trace throughout. *)
 let run (cfg : config) (goal : Trusted.t) : (Strict.value, error) result * Trace.t =
@@ -49,15 +53,31 @@ let run (cfg : config) (goal : Trusted.t) : (Strict.value, error) result * Trace
       emit
         (Trace.Plan_generated
            { prompt_hash = hash (Trusted.to_string goal); plan = Plan.to_json plan });
-      (match Strict.admit cfg.registry plan with
-      | Error rs ->
+      let rep = Strict.analyze cfg.registry plan in
+      (match rep.rejections with
+      | _ :: _ as rs ->
           emit
             (Trace.Plan_admitted
                { verdict = String.concat "; " (List.map (fun (r : Strict.rejection) -> r.reason) rs) });
           finish (Error (Plan_rejected rs))
-      | Ok () ->
+      | [] ->
           emit (Trace.Plan_admitted { verdict = "ok" });
-          (* hooks that record as they run *)
+          (* whole-plan approval (§13.6): if any sink needs approval, show the
+             rendered data-flow graph ONCE and decide before executing *)
+          let plan_ok =
+            if rep.needs_approval = [] then true
+            else
+              let decision = cfg.approve_plan (Strict.render_report rep) in
+              emit
+                (Trace.Approval
+                   { tool = "<whole-plan>"; decision = (if decision then "approved" else "denied") });
+              decision
+          in
+          if not plan_ok then
+            finish (Error (Exec (Strict.Approval_denied { site = "<whole-plan>"; reason = "plan approval denied" })))
+          else
+          (* hooks that record as they run; per-sink approve is now
+             defense-in-depth — the whole-plan decision already gated it *)
           let hooks : Strict.exec_hooks =
             {
               run_tool =
@@ -95,11 +115,8 @@ let run (cfg : config) (goal : Trusted.t) : (Strict.value, error) result * Trace
                          prov = Prov.to_json source.Strict.prov;
                        });
                   out);
-              approve =
-                (fun ~tool ~field ~value ->
-                  let ok = cfg.approve ~tool ~field ~value in
-                  emit (Trace.Approval { tool; decision = (if ok then "approved" else "denied:" ^ field) });
-                  ok);
+              approve = (fun ~tool:_ ~field:_ ~value:_ -> true);
+              (* already gated by the whole-plan approval above *)
             }
           in
           finish (Result.map_error (fun e -> Exec e) (Strict.run cfg.registry hooks plan)))

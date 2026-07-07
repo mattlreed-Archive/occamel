@@ -98,7 +98,7 @@ let () =
           plan_with = plan_with ~sw ~net;
           extract_with = extract_with ~sw ~net;
           run_tool;
-          approve = (fun ~tool:_ ~field:_ ~value:_ -> true);
+          approve_plan = Occamel.Strict_run.auto_approve_plan;
         }
       in
       let result, trace = Occamel.Strict_run.run cfg (Occamel.Trusted.of_user question) in

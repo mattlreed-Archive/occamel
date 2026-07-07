@@ -206,4 +206,26 @@ let () =
   in
   assert (S.admit registry unbound <> Ok ());
 
+  (* M4: analyze collects the data-flow graph — needs_approval sinks and
+     extractions with their provenance *)
+  let send_plan : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+      Extract { bind = "e"; source = Var "r"; question = "who?" };
+      Call { bind = "s"; tool = "send"; args = [ ("to", Var "e"); ("body", Lit "hi") ] };
+      Return (Var "s") ]
+  in
+  let rep = S.analyze registry send_plan in
+  assert (rep.rejections = []);
+  assert (List.length rep.needs_approval = 1);  (* send.to, untrusted *)
+  assert (List.length rep.extractions = 1);
+  (* the rendered view is pure ASCII even if provenance/site carried exotic
+     bytes — homoglyph/bidi safety (§13.6) *)
+  let rendered = S.render_report rep in
+  String.iter (fun c -> assert (Char.code c >= 0x09 && Char.code c <= 0x7e)) rendered;
+  assert (
+    let re = "send.to" in
+    let n = String.length re and h = String.length rendered in
+    let rec go i = i + n <= h && (String.sub rendered i n = re || go (i + 1)) in
+    go 0);
+
   print_endline "all strict tests passed"
