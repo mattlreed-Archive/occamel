@@ -21,3 +21,8 @@
  (deps
   (glob_files_rec golden/*))
  (libraries occamel occamel_examples yojson))
+
+(test
+ (name test_strict)
+ (modules test_strict)
+ (libraries occamel))
