@@ -35,14 +35,19 @@ stack multiple edits on top of a broken build — fix type errors as they appear
   surface at `/v1`). M0 model: `qwen3:14b`.
 - The design doc's example URL `http://ether:11434` refers to this machine
   (hostname `m4pro-ether`); use `localhost` in code and config.
+- Models pulled: `qwen3:14b` and `gemma4:12b` (Matt prefers Gemma 4).
+  Sampling — qwen3: temp 0.7/top_p 0.8/top_k 20, never greedy,
+  `num_ctx >= 16384`; gemma4: temp 1.0/top_p 0.95/top_k 64.
 - Key operational findings (details + sources in `docs/research/m0-*.md`,
-  dated 2026-07-06): run qwen3 with thinking OFF (`/no_think`) — grammar
-  constraint and thinking mode conflict; use Qwen's sampling
-  (temp 0.7/top_p 0.8/top_k 20, never greedy) and `num_ctx >= 16384`; avoid
-  recursive `$ref`/`$defs` in schemas (buggy in llama.cpp/Ollama) — ship
-  depth-unrolled inline schemas and ALWAYS re-validate client-side; prefer
-  schema-constrained `format` output over Ollama's native `tools` path for
-  qwen3; probe capabilities per (model, backend) pair, not per endpoint.
+  dated 2026-07-06): avoid recursive `$ref`/`$defs` in schemas (buggy in
+  llama.cpp/Ollama) — ship depth-unrolled inline schemas and ALWAYS
+  re-validate client-side; prefer schema-constrained `format` output over
+  Ollama's native `tools` path; probe capabilities per
+  (model, backend, version) triple — the historical silent-constraint-drop
+  bugs (ollama#14645 qwen3, #15260 gemma4, both tied to `think: false`)
+  are fixed in the installed 0.31.1 (verified by canary,
+  `docs/research/m0-gemma4-canary.md`) but were silent and version-specific,
+  so never skip the probe after an Ollama upgrade.
 
 ## Conventions
 
