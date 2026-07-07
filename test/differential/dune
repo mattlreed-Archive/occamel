@@ -1,0 +1,8 @@
+; Differential fuzz harness (design doc section 13.10). Not part of the
+; default test alias: it needs node and a pinned upstream clone
+; (EVENTSOURCE_UPSTREAM). Run from the repo root:
+;   EVENTSOURCE_UPSTREAM=/path/to/eventsource-parser \
+;     dune exec --root . test/differential/diff_fuzz.exe -- -n 10000
+(executable
+ (name diff_fuzz)
+ (libraries occamel_wire qcheck-core yojson unix))
