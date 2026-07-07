@@ -112,10 +112,13 @@ let () =
   | Error e ->
       Printf.printf "PROBE TRANSPORT FAILURE: %s\n%!" e;
       exit 1);
-  let oc_a = open_out (Filename.concat out_dir "m1-repair-a.jsonl") in
-  run_arm ~sw ~net ~clock ~label:"A:repair" ~system:system_prompt ~with_repair:true oc_a;
-  close_out oc_a;
-  let oc_b = open_out (Filename.concat out_dir "m1-repair-b.jsonl") in
-  run_arm ~sw ~net ~clock ~label:"B:exemplar" ~system:(system_prompt ^ return_exemplar)
-    ~with_repair:false oc_b;
-  close_out oc_b
+  let which = if Array.length Sys.argv > 1 then Sys.argv.(1) else "all" in
+  if which = "all" || which = "a" then (
+    let oc_a = open_out (Filename.concat out_dir "m1-repair-a.jsonl") in
+    run_arm ~sw ~net ~clock ~label:"A:repair" ~system:system_prompt ~with_repair:true oc_a;
+    close_out oc_a);
+  if which = "all" || which = "b" then (
+    let oc_b = open_out (Filename.concat out_dir "m1-repair-b.jsonl") in
+    run_arm ~sw ~net ~clock ~label:"B:exemplar" ~system:(system_prompt ^ return_exemplar)
+      ~with_repair:false oc_b;
+    close_out oc_b)

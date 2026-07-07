@@ -11,9 +11,13 @@ and milestones. Code follows the doc; if implementation reveals the doc is wrong
 **edit the doc deliberately (with a version bump + changelog line in the status
 header) in the same change** — never let them drift silently.
 
-**Current milestone: M0** (design doc §11) — minimal oai client against local
-Ollama + single-tool loop. Go/no-go question: do qwen3-class local models emit
-sensible plans under `format` constraint?
+**Current milestone: M1+M2** (design doc §11). M0 verdict was GO
+(`docs/research/m0-results.md`). M1: `occamel_ppx` derives T2-dialect schemas
++ codecs; §8 repair loop; complexity warning. M2: loop mode
+(`Occamel.Loop`) — Ask/Invoke/Note/Approve effects, production + replay
+handlers, typed traces with schema-hash-checked replay, approval handler.
+Security-review fixes applied (`docs/research/m1-security-review.md`);
+F4 (trace signing) deferred to M4.
 
 ## Build & test
 
