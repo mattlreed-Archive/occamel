@@ -11,15 +11,19 @@ and milestones. Code follows the doc; if implementation reveals the doc is wrong
 **edit the doc deliberately (with a version bump + changelog line in the status
 header) in the same change** — never let them drift silently.
 
-**Current milestone: M5 — evaluation** (design doc §11). Done: M0 GO; M1 (ppx
-deriver, repair loop); M2 (loop mode); M3 (strict mode: provenance, admission,
-sink policies); M4 (Secret.t, trace signing/redaction, whole-plan approval,
-channel-width, replan-on-Tool_error). Each has a `docs/research/m{N}-*.md`
-writeup + security review. M5: the two-mode (loop vs strict) utility +
-injection-resistance comparison on an AgentDojo-inspired suite — the project's
-headline artifact. Do NOT autonomously opam-publish or announce (external).
-Deferred: full §13.3 capability axis, typed per-tool arg codecs, Foreach,
-replay-into-live approval seam.
+**Status: M0–M5 complete** (design doc §11). M0 GO; M1 (ppx deriver, repair
+loop); M2 (loop mode); M3 (strict mode: provenance, admission, sink policies);
+M4 (Secret.t, trace signing/redaction, whole-plan approval, channel-width,
+replan-on-Tool_error); M5 (two-mode injection/utility comparison —
+`docs/research/m5-results.md`: strict 0/5 injections vs loop 2/5, with the
+utility/degradation tradeoff measured). Each milestone has a
+`docs/research/m{N}-*.md` writeup + adversarial security review.
+
+**Remaining (require the user / not done autonomously):** opam publish +
+announce (external); merge the eventsource-parser branch
+`worktree-agent-a718f198300b01730`. **Deferred technical work:** full §13.3
+capability axis, typed per-tool arg codecs, wiring channel-width into a typed
+plan-DSL `Extract`, Foreach (M3b), replay-into-live approval seam.
 
 ## Build & test
 
