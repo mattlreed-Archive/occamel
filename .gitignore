@@ -1,0 +1,5 @@
+_build/
+.claude/settings.local.json
+_opam/
+*.install
+.DS_Store
