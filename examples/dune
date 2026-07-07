@@ -1,0 +1,5 @@
+(executable
+ (name hello)
+ (libraries occamel yojson)
+ (preprocess
+  (pps occamel_ppx)))
