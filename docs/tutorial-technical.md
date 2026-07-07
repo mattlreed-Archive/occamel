@@ -7,9 +7,11 @@ the stable anchor.
 
 The core library (`src/occamel/`) is ~2,300 lines across small, single-purpose
 modules. Nothing here has an HTTP dependency; backends plug in at the edge.
+Every core module has a `.mli` interface — **read the `.mli` first**; it's the
+module's table of contents (its public surface, without the implementation).
 
 ```
-src/occamel/            the core (no HTTP)
+src/occamel/            the core (no HTTP) — each .ml has a .mli
   codec.ml    schema.ml     JSON decode runtime + schema dialect/validator/width
   plan.ml                   the plan DSL: type, grammar, codec, scoping
   prov.ml     trusted.ml    provenance lattice + the compile-time trust boundary
@@ -24,7 +26,76 @@ src/occamel_ppx/            [@@deriving occamel] — schema+codec derivation
 src/occamel_oai/            OpenAI-compatible HTTP client (cohttp-eio)
 src/occamel_wire/           SSE parser (ported eventsource-parser)
 src/occamel_examples/       research_agent, injection_agent, tool fixtures
+examples/hello.ml           the 5-minute standalone taste (see §0)
 ```
+
+---
+
+## 0. Start here — the 5-minute version
+
+Before any of the modules, run and read the smallest possible program
+(`examples/hello.ml`, ~30 lines, no model or network):
+
+```
+dune exec examples/hello.exe
+```
+
+It walks the whole core idea in five steps: **define a variant → the ppx
+derives its JSON schema → a (pretend) constrained model reply → parse it into a
+typed value at the boundary → handle it with an exhaustive `match`.** The
+payoff is the last step: delete the `Answer` case and the program won't
+compile — the compiler forces you to handle every action the model can choose.
+That single property (`match` over the model's output, checked at compile time)
+is the entire "typed boundary" bet in one screen. Everything else in the
+codebase is that idea plus security machinery.
+
+## 0.1 A reading path through the code
+
+Reading `strict.ml` top-to-bottom first is the *wrong* order. This path builds
+up the concepts in dependency order, smallest first:
+
+1. **`examples/hello.ml`** — the boundary idea, standalone (§0).
+2. **`prov.mli`** (then `prov.ml`, ~65 lines) — the whole trust model:
+   sources, `join`, `is_trusted`. If you understand `is_trusted`, you
+   understand strict mode's runtime guarantee.
+3. **`trusted.mli`** (~15 lines) — the compile-time boundary. Note there is no
+   constructor from a tool result to `Trusted.t`. That's the whole CaMeL
+   guarantee, as a type.
+4. **`plan.mli`** — the `Plan.step` type. This is what the privileged planner
+   emits. Small on purpose.
+5. **`strict.mli`** — read the interface: tool specs, `analyze`/`admit`,
+   `run`. Then read `analyze` in `strict.ml` (the static walk), then `run`
+   (the dynamic walk). They deliberately mirror each other; `control_taint` is
+   the shared piece that keeps them in sync.
+6. **`loop.mli`** — the effects (`Ask`/`Invoke`/`Note`/`Approve`) and the two
+   handlers (`run`, `replay`). This is loop mode entire.
+7. **`strict_run.ml`** — how a real strict run is wired: `plan_with` (planner)
+   → `analyze` → whole-plan approval → `Strict.run`, recording a trace.
+
+Everything else (`codec`, `schema`, `repair`, `trace`, `secret`, the ppx) is
+supporting machinery you can read on demand when a step above references it.
+
+## 0.2 Learn from the tests
+
+The `test/` suite is the most concrete documentation in the repo — each test
+encodes an invariant as a runnable example. When a prose explanation feels
+abstract, open the matching test:
+
+- **`test/test_strict.ml`** — the security rules as concrete plans: "a literal
+  `delete.path` inside an `if` on an untrusted condition is *rejected*" (the
+  control-flow-taint case), the capability checks, and the
+  **differential test** (any admitted plan must never hit a denied sink at
+  runtime — the soundness contract in executable form).
+- **`test/test_derive.ml`** — the ppx laws: `of_json (to_json x) = Ok x` and
+  channel-width, as property tests.
+- **`test/test_replay.ml`, `test/test_golden.ml`** — record/replay determinism
+  and every divergence class failing loudly.
+- **`test/test_replay_live.ml`** — the replay-into-live seam: unsigned/tampered
+  rejected, and a recorded approval NOT authorizing a live send.
+- **`test/test_secret_trace.ml`** — `Secret.t` unserializability, redaction,
+  and HMAC tamper-detection.
+
+A good way to learn a mechanism: read its `.mli`, then its test, then the `.ml`.
 
 ---
 

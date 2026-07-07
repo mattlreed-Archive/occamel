@@ -6,6 +6,49 @@ companion `tutorial-technical.md` walks the code. Both assume you've skimmed
 
 ---
 
+## 0. Glossary
+
+The vocabulary used throughout, in one place. Skim it now; come back when a term
+bites.
+
+- **Loop mode** — the conventional agent: one model reads tool results and
+  decides the next action in a loop. No architectural injection resistance.
+- **Strict mode** — the CaMeL split: a privileged *planner* + a quarantined
+  *reader* + an interpreter. The injection-resistant mode.
+- **Planner (P-LLM)** — the privileged model. Sees only the trusted request and
+  tool specs; emits a *plan*; never sees tool output.
+- **Quarantined extractor (Q-LLM)** — the only model call that reads untrusted
+  tool output. Answers into a schema; can never invoke a tool.
+- **Plan** — a typed AST (`Plan.t`) the planner emits: a list of
+  Call/Extract/If/Foreach/Return steps. Because it's *data*, it can be analyzed
+  before it runs.
+- **Provenance** — a set of *sources* attached to every value, recording where
+  its data came from (User, Static, Tool_result, Extracted, Branch). A value is
+  **trusted** iff every source is User or Static.
+- **Taint** — being untrusted / attacker-influenced. **Control-flow taint**:
+  everything executed inside a branch or loop over untrusted data is tainted,
+  because the attacker chose whether/how often it runs.
+- **Sink** — a place a value flows *into* that does something consequential (a
+  tool argument). A **capability-bearing sink** is a tool with capabilities.
+- **Sink policy** — a rule per tool field: may a value of *this provenance*
+  reach *this field*? Verdict is Allow / Deny / Needs_approval.
+- **Admission** — the static analysis of a plan *before* execution: compute each
+  value's worst-case provenance, check every sink policy, reject bad plans with
+  a structured reason. A sound over-approximation of the runtime.
+- **Capability** — a declared permission a tool needs (Fs_read, Net, …). The
+  registry *grants* a set; a tool whose capabilities aren't granted is rejected
+  (default-deny).
+- **Channel width** — how many bits an attacker can inject through an extraction
+  into a given schema (a bool = 1 bit; a free string = unbounded). The measured
+  residual attack.
+- **Laundering** — illegitimately turning untrusted data into trusted (the thing
+  the type boundary and `launder`'s audit prevent).
+- **Trace** — the JSONL record of every effect in a run. Replayable, signable.
+- **Admission ≠ approval:** admission is the automatic policy check; **approval**
+  is the human being shown the plan's data-flow graph and saying yes/no.
+
+---
+
 ## 1. The two problems Occamel exists to solve
 
 Every LLM agent harness sits between a model that emits text and a program that
