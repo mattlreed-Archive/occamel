@@ -59,14 +59,36 @@ let approve_if_untrusted ~tool ~fields : policy =
 
 type registry = {
   policies : policy list;
-  (* the display sink: the final Return value shown to the user. Accepts any
-     provenance — the user reading untrusted content is the product working. *)
+  default_policy : (string -> Prov.t -> verdict) option;
+  (* verdict for a tool with NO matching policy. None => Allow (permissive, the
+     M3 default). Set to a deny/approve function for fail-closed registries
+     (partial mitigation for the §13.3 capability axis, deferred to M4): a
+     newly added dangerous tool whose policy the author forgot is then denied,
+     not silently opened. *)
 }
 
-let policy_for (reg : registry) (tool : string) : string -> Prov.t -> verdict =
-  match List.find_opt (fun p -> p.tool = tool) reg.policies with
-  | Some p -> p.field_policy
-  | None -> default_field_policy
+let registry ?default_policy policies = { policies; default_policy }
+
+(* H1 fix: combine ALL policies matching a tool, taking the most restrictive
+   verdict (Deny > Needs_approval > Allow). Returning only the first match
+   silently dropped the rest — a dropped require_trusted is a fail-open of the
+   flagship control. *)
+let most_restrictive a b =
+  match (a, b) with
+  | Deny r, _ -> Deny r
+  | _, Deny r -> Deny r
+  | Needs_approval, _ | _, Needs_approval -> Needs_approval
+  | Allow, Allow -> Allow
+
+let field_verdict (reg : registry) (tool : string) (field : string) (prov : Prov.t) :
+    verdict =
+  match List.filter (fun p -> p.tool = tool) reg.policies with
+  | [] -> (
+      match reg.default_policy with Some d -> d field prov | None -> Allow)
+  | ps ->
+      List.fold_left
+        (fun acc p -> most_restrictive acc (p.field_policy field prov))
+        Allow ps
 
 (* ---------- static provenance walk / admission (§6.4) ---------- *)
 
@@ -81,22 +103,25 @@ type rejection = { site : Prov.site; reason : string }
 let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
   let rejections = ref [] in
   let reject site reason = rejections := { site; reason } :: !rejections in
-  (* env: bind name -> worst-case provenance *)
+  (* M5 fix: an unbound var is treated as UNTRUSTED, not empty/trusted, so
+     admission is sound even if a caller hands us a plan that skipped
+     Plan.of_json's scoping check. We also run that check ourselves below. *)
   let prov_of_expr env : Plan.expr -> Prov.t = function
     | Plan.Lit _ -> Prov.static
     | Plan.Var name -> (
-        match List.assoc_opt name env with Some p -> p | None -> Prov.empty)
+        match List.assoc_opt name env with
+        | Some p -> p
+        | None -> Prov.tool_result ("?unbound:" ^ name))
   in
   (* check a Call's fields against the sink policy. The effective provenance of
      an argument is its data-flow provenance joined with the branch taint of
      the context executing it — a trusted literal inside an untrusted branch is
      still attacker-influenced (§6.2). *)
   let check_call env ~branch_taint ~site ~tool ~args =
-    let fp = policy_for reg tool in
     List.iter
       (fun (field, e) ->
         let prov = Prov.join branch_taint (prov_of_expr env e) in
-        match fp field prov with
+        match field_verdict reg tool field prov with
         | Allow | Needs_approval -> ()
         | Deny reason -> reject site reason)
       args
@@ -136,8 +161,13 @@ let admit (reg : registry) (plan : Plan.t) : (unit, rejection list) result =
             env)
       env steps
   in
-  let _ = walk [] ~branch_taint:Prov.empty plan in
-  match List.rev !rejections with [] -> Ok () | rs -> Error rs
+  (* M5: run the scoping check ourselves — don't rely on the plan having come
+     through Plan.of_json. A scoping violation is an admission rejection. *)
+  match Plan.validate_scoping plan with
+  | Error e -> Error [ { site = e.Codec.path; reason = e.Codec.msg } ]
+  | Ok () -> (
+      let _ = walk [] ~branch_taint:Prov.empty plan in
+      match List.rev !rejections with [] -> Ok () | rs -> Error rs)
 
 (* ---------- runtime executor (§6.2) ---------- *)
 
@@ -185,13 +215,12 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
             in
             (* sink policy at execution, on the actual values. Effective
                provenance joins the branch taint (§6.2), matching admission. *)
-            let fp = policy_for reg tool in
             let* () =
               List.fold_left
                 (fun acc (field, (v : value)) ->
                   let* () = acc in
                   let eff_prov = Prov.join branch_taint v.prov in
-                  match fp field eff_prov with
+                  match field_verdict reg tool field eff_prov with
                   | Allow -> Ok ()
                   | Deny reason -> Error (Denied_sink { site = bind; reason })
                   | Needs_approval ->

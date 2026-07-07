@@ -21,13 +21,11 @@ let () =
 (* delete.path must be trusted; web_search / send allow anything except
    send.to which needs approval when untrusted *)
 let registry : S.registry =
-  {
-    policies =
-      [
-        S.require_trusted ~tool:"delete" ~fields:[ "path" ];
-        S.approve_if_untrusted ~tool:"send" ~fields:[ "to" ];
-      ];
-  }
+  S.registry
+    [
+      S.require_trusted ~tool:"delete" ~fields:[ "path" ];
+      S.approve_if_untrusted ~tool:"send" ~fields:[ "to" ];
+    ]
 
 let hooks ~approve : S.exec_hooks =
   {
@@ -169,5 +167,43 @@ let () =
         | Error (S.Denied_sink _) -> failwith "admitted plan hit a denied sink at runtime!"
         | _ -> ())
     plans;
+
+  (* H1: two policies for the same tool must BOTH apply (most-restrictive
+     wins). A dropped require_trusted would fail open. *)
+  let multi : S.registry =
+    S.registry
+      [
+        S.require_trusted ~tool:"send" ~fields:[ "to" ];
+        S.approve_if_untrusted ~tool:"send" ~fields:[ "body" ];
+      ]
+  in
+  let untrusted_to : Pl.t =
+    [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
+      Call { bind = "s"; tool = "send";
+             args = [ ("to", Var "r"); ("body", Lit "hi") ] };
+      Return (Var "s") ]
+  in
+  (* to is require_trusted + untrusted -> Deny, even though a second policy
+     exists for the tool *)
+  assert (S.admit multi untrusted_to <> Ok ());
+
+  (* M2: default_policy makes an unlisted tool fail closed *)
+  let fail_closed : S.registry =
+    S.registry ~default_policy:(fun _ _ -> S.Deny "no policy for this tool") []
+  in
+  let uses_unlisted : Pl.t =
+    [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/a") ] }; Return (Var "d") ]
+  in
+  assert (S.admit fail_closed uses_unlisted <> Ok ());
+  (* and the permissive default still allows it *)
+  assert (S.admit (S.registry []) uses_unlisted = Ok ());
+
+  (* M5: a plan with an unbound var reference is rejected by admission
+     (scoping check + untrusted-unknown), not silently treated as trusted *)
+  let unbound : Pl.t =
+    [ Call { bind = "d"; tool = "delete"; args = [ ("path", Var "ghost") ] };
+      Return (Var "d") ]
+  in
+  assert (S.admit registry unbound <> Ok ());
 
   print_endline "all strict tests passed"
