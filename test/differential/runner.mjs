@@ -70,17 +70,16 @@ for await (const line of rl) {
   for (const chunk of c.chunks) {
     try {
       parser.feed(unhex(chunk))
-    } catch {
-      // Terminated after max-buffer overflow: upstream throws; the OCaml
-      // port's typed-state equivalent is a silent no-op. Normalize to no-op.
+    } catch (err) {
+      // ONLY the post-overflow termination throw is an expected divergence
+      // (the OCaml port's typed-state equivalent is a silent no-op). Any
+      // other thrown error is a real behavioral difference the port would
+      // NOT reproduce — surface it instead of masking it as a match.
+      if (!/max buffer size/.test(err?.message ?? '')) throw err
     }
   }
   if (c.consume) {
-    try {
-      parser.reset({consume: true})
-    } catch {
-      /* unreachable in upstream, defensive */
-    }
+    parser.reset({consume: true})
   }
   results.push(JSON.stringify(out))
 }

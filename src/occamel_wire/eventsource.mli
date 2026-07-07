@@ -66,10 +66,28 @@ val create : ?max_buffer_size:int -> unit -> t
 
     [max_buffer_size] bounds, in bytes, the sum of (a) a partial line not
     yet terminated and (b) the accumulated multi-line event data — the two
-    unbounded surfaces of an SSE parser. On overflow the parser emits
-    [Parse_error (Buffer_limit_exceeded _)] once and terminates (§13.8).
-    Default: unbounded, mirroring upstream — wire-layer callers should
-    always set it. *)
+    surfaces that grow {e across} [feed] calls. On overflow the parser emits
+    [Parse_error (Buffer_limit_exceeded _)] once, drops its buffers, and
+    terminates (§13.8).
+
+    Two limits to the guarantee, faithful to upstream, that the wire layer
+    must close for full §13.8 compliance:
+    - The check runs once per [feed], {e after} the chunk is processed, so
+      retained bytes can transiently exceed [max_buffer_size] by up to one
+      whole chunk (a single oversized chunk containing a complete event is
+      dispatched before the check fires). Callers must therefore also bound
+      transport read sizes — this is a "max retained buffer" control, not a
+      "max event size" one on its own.
+    - The [id] and [event_type] buffers are {e not} counted (they hold a
+      single field value each, bounded by one line, and cannot accumulate
+      across data lines).
+
+    A non-positive [max_buffer_size] rejects everything: the first [feed]
+    (even of [""]) overflows and terminates — fail-closed, deliberate.
+
+    Default: unbounded, mirroring upstream. Wire-layer call sites (the
+    streaming clients) MUST pass this; it is optional only so the pure
+    parser stays usable in tests. *)
 
 val feed : t -> string -> t * output list
 (** [feed t chunk] consumes the next slice of the byte stream and returns

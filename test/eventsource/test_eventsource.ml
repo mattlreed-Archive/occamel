@@ -59,7 +59,8 @@ let test_basic () =
 (* -- upstream: 'stream of `time` event names, unbalanced chunks' --
    Random split points, deterministic seed. *)
 let test_unbalanced_chunks () =
-  Random.self_init ();
+  (* Fixed seed: a rare split-dependent failure must be reproducible. *)
+  Random.init 20260706;
   let messages =
     List.init 30 (fun i ->
         Printf.sprintf "id: %d\nevent: time\ndata: 2026-07-06T00:00:%02d.000Z\n\n" i i)
@@ -453,6 +454,23 @@ let test_max_buffer_not_triggered () =
 let test_max_buffer_unbounded_default () =
   check "unbounded by default" [] (run [ String.make 1_000_000 'x' ])
 
+(* Non-positive limits are fail-closed. Limit 0: any buffered byte (an
+   unterminated fragment) overflows; an empty feed buffers nothing so is a
+   no-op. Negative limit: even the empty feed overflows immediately. *)
+let test_max_buffer_zero () =
+  let t = Eventsource.create ~max_buffer_size:0 () in
+  let t, out = Eventsource.feed t "" in
+  check "zero limit: empty feed buffers nothing" [] out;
+  let t, out = Eventsource.feed t "x" in
+  check "zero limit: any pending byte overflows" [ overflow 0 ] out;
+  Alcotest.(check bool) "terminated" true (Eventsource.is_terminated t)
+
+let test_max_buffer_negative () =
+  let t = Eventsource.create ~max_buffer_size:(-1) () in
+  let t, out = Eventsource.feed t "" in
+  check "negative limit rejects even empty feed" [ overflow (-1) ] out;
+  Alcotest.(check bool) "terminated" true (Eventsource.is_terminated t)
+
 (* -- port addition: retry values that overflow [int] saturate -- *)
 let test_retry_saturates () =
   check "retry saturation"
@@ -582,6 +600,8 @@ let () =
           Alcotest.test_case "not triggered under limit" `Quick
             test_max_buffer_not_triggered;
           Alcotest.test_case "unbounded default" `Quick test_max_buffer_unbounded_default;
+          Alcotest.test_case "zero limit fail-closed" `Quick test_max_buffer_zero;
+          Alcotest.test_case "negative limit fail-closed" `Quick test_max_buffer_negative;
         ] );
       ( "port additions",
         [
