@@ -17,8 +17,11 @@ type step =
 
 type t = step list
 
-(* M0: single tool, fixed here. Post-M0 the enum comes from the registry. *)
-let known_tools = [ "web_search" ]
+(* M0: single tool, fixed here. Post-M0 the enum comes from the registry (the
+   proper design; deferred with the typed tool registry). web_search is the
+   benign tool; send_message is the dangerous tool the M5 injection eval guards
+   with a require_trusted policy on its recipient field. *)
+let known_tools = [ "web_search"; "send_message" ]
 
 type error = Codec.error
 
