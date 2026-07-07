@@ -194,8 +194,17 @@ let rec channel_width (schema : t) : width =
               | Some (`Int lo), Some (`Int hi) when hi >= lo -> Bits (log2 (hi - lo + 1))
               | _ -> Unbounded)
           | Some (`String "object") ->
-              let props = match member "properties" schema with Some (`Assoc p) -> p | _ -> [] in
-              List.fold_left (fun acc (_, p) -> width_add acc (channel_width p)) (Bits 0.) props
+              (* M4-review M1: an object that permits additional properties is
+                 an OPEN channel — the extractor can emit arbitrary extra
+                 key/value bytes. Only a closed object (additionalProperties:
+                 false) is bounded by its declared fields. Under-reporting here
+                 would HIDE an injection channel, so default to Unbounded. *)
+              if member "additionalProperties" schema <> Some (`Bool false) then Unbounded
+              else
+                let props =
+                  match member "properties" schema with Some (`Assoc p) -> p | _ -> []
+                in
+                List.fold_left (fun acc (_, p) -> width_add acc (channel_width p)) (Bits 0.) props
           (* string (non-enum), number, array: an open channel *)
           | _ -> Unbounded))
 

@@ -198,4 +198,21 @@ let () =
     Occamel.Schema.extraction_lint ~from_untrusted:false ~reaches_sink:true search_args_schema
     = None);
 
+  (* M4-review M1: an object that permits additional properties is an OPEN
+     channel, not zero bits — under-reporting would hide an injection channel *)
+  let open_obj = Yojson.Safe.from_string {|{"type":"object","properties":{}}|} in
+  assert (Occamel.Schema.channel_width open_obj = Occamel.Schema.Unbounded);
+  let narrow_but_open =
+    Yojson.Safe.from_string
+      {|{"type":"object","properties":{"flag":{"type":"boolean"}}}|}
+  in
+  assert (Occamel.Schema.channel_width narrow_but_open = Occamel.Schema.Unbounded);
+  let closed_bool =
+    Yojson.Safe.from_string
+      {|{"type":"object","properties":{"flag":{"type":"boolean"}},"additionalProperties":false}|}
+  in
+  (match Occamel.Schema.channel_width closed_bool with
+  | Occamel.Schema.Bits b -> assert (b = 1.0)
+  | Unbounded -> failwith "closed bool-only object should be 1 bit");
+
   print_endline "all derive tests passed"

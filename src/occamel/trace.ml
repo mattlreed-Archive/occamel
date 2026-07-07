@@ -163,9 +163,16 @@ let redact_event (e : event) : event =
   | Ask_response r -> Ask_response { r with content = scrub r.content }
   | Tool_call r -> Tool_call { r with args = scrub_json r.args; result = scrub_json r.result }
   | Tool_failed r -> Tool_failed { r with args = scrub_json r.args; error = scrub r.error }
-  | Extraction r -> Extraction { r with output = scrub r.output; question = scrub r.question }
+  | Extraction r ->
+      (* M4-review M2: scrub prov too, not just output/question *)
+      Extraction { r with output = scrub r.output; question = scrub r.question; prov = scrub_json r.prov }
   | Note s -> Note (scrub s)
-  | (Plan_generated _ | Plan_admitted _ | Approval _) as e -> e
+  (* M4-review M2: the plan embeds Lit values and the goal-derived prompt —
+     trusted != non-sensitive (a user goal may contain PII). Scrub it and the
+     verdict, so "every string field" is actually true. *)
+  | Plan_generated r -> Plan_generated { r with plan = scrub_json r.plan }
+  | Plan_admitted r -> Plan_admitted { verdict = scrub r.verdict }
+  | Approval _ as e -> e
 
 (* ---------- integrity (§13.7, retires F4 integrity half) ----------
    An HMAC over the exact serialized event lines. Written as a trailing
@@ -218,7 +225,12 @@ let load_checked (path : string) : (t * integrity, string) result =
     | Some s, Some key ->
         if String.equal s (hmac ~key (String.concat "\n" data_lines)) then Verified
         else Bad_signature
-    | None, _ | _, None -> Unsigned
+    (* L3: a key is configured but the trace carries no signature — treat as
+       tampered (a strip-to-downgrade), not silently Unsigned. An attacker
+       can't forge a sig, so there's no downside; Unsigned now means only
+       "no key configured at all". *)
+    | None, Some _ -> Bad_signature
+    | _, None -> Unsigned
   in
   if integrity = Bad_signature then Error "trace: signature verification failed (tampered?)"
   else

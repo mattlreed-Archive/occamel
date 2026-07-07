@@ -223,7 +223,7 @@ let render_report (rep : report) : string =
       add "  - %s.%s (at %s) receives %s data\n" (escape_ascii s.s_tool)
         (escape_ascii s.s_field) (escape_ascii s.s_site)
         (if Prov.is_trusted s.s_prov then "trusted" else "UNTRUSTED");
-      add "      provenance: %s\n" (Prov.to_string s.s_prov))
+      add "      provenance: %s\n" (escape_ascii (Prov.to_string s.s_prov)))
     rep.needs_approval;
   if rep.extractions <> [] then add "Extractions (quarantined reads):\n";
   List.iter
