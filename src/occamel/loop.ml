@@ -51,16 +51,32 @@ type _ Effect.t +=
   | Note : string -> unit Effect.t
   | Approve : approval_view -> approval Effect.t
 
-(* §13.6: exact values, truncation-safe. Long values render as length + hash
-   + a short prefix — never a silently cut string. *)
+(* §13.6: exact values, truncation-safe AND homoglyph/bidi/control-safe.
+   Escape every byte outside printable ASCII (0x20-0x7E) as \xHH — this
+   neutralizes bidi overrides (U+202E), zero-width and format characters, and
+   non-ASCII homoglyphs by construction, so the approver reads exactly what
+   will execute. Escaping first makes the value pure ASCII, so truncating the
+   escaped form can never split a UTF-8 sequence. *)
+let escape_ascii (s : string) : string =
+  let b = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+      let code = Char.code c in
+      if code >= 0x20 && code <= 0x7e && c <> '\\' then Buffer.add_char b c
+      else Buffer.add_string b (Printf.sprintf "\\x%02x" code))
+    s;
+  Buffer.contents b
+
 let render_field (k : string) (v : Yojson.Safe.t) : string * string =
-  let s = Yojson.Safe.to_string v in
-  if String.length s <= 200 then (k, s)
+  let raw = Yojson.Safe.to_string v in
+  let safe = escape_ascii raw in
+  if String.length safe <= 200 then (k, safe)
   else
+    (* hash the RAW bytes so the fingerprint identifies the real value *)
     ( k,
-      Printf.sprintf "<%d bytes, md5:%s> %s…" (String.length s)
-        (Digest.to_hex (Digest.string s))
-        (String.sub s 0 80) )
+      Printf.sprintf "<%d bytes, md5:%s> %s..." (String.length raw)
+        (Digest.to_hex (Digest.string raw))
+        (String.sub safe 0 80) )
 
 let view_of_args ~tool (args_json : Yojson.Safe.t) : approval_view =
   let fields =

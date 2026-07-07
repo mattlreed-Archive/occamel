@@ -348,9 +348,7 @@ let gen_variant ~loc td (cds : constructor_declaration list) =
         cds
       @ [
           Ast.case ~lhs:(Ast.pvar ~loc "other") ~guard:None
-            ~rhs:
-              [%expr
-                Occamel.Codec.err path (Printf.sprintf "unknown value %S" other)];
+            ~rhs:[%expr Occamel.Codec.err_bad_enum path ~kind:"value" other];
         ]
     in
     let decoder =
@@ -451,8 +449,8 @@ let gen_variant ~loc td (cds : constructor_declaration list) =
                         Ast.case ~lhs:(Ast.pvar ~loc "other") ~guard:None
                           ~rhs:
                             [%expr
-                              Occamel.Codec.err (path ^ ".kind")
-                                (Printf.sprintf "unknown kind %S" other)];
+                              Occamel.Codec.err_bad_enum (path ^ ".kind")
+                                ~kind:"kind" other];
                       ])])]
     in
     let encode_arm cd =

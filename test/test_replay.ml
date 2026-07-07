@@ -117,4 +117,19 @@ let () =
       assert (String.length rendered >= 2 && String.sub rendered 0 1 = "<")
   | _ -> failwith "render");
 
+  (* --- §13.6 homoglyph/bidi/control escaping (F3): a bidi override and a
+         non-ASCII homoglyph must NOT survive into the rendered field --- *)
+  let bidi = "/etc/\xe2\x80\xaepasswd" (* U+202E RIGHT-TO-LEFT OVERRIDE *) in
+  let view = L.view_of_args ~tool:"rm" (`Assoc [ ("path", `String bidi) ]) in
+  (match view.fields with
+  | [ ("path", rendered) ] ->
+      String.iter (fun c -> assert (Char.code c >= 0x20 && Char.code c <= 0x7e)) rendered;
+      (* the escaped bytes of U+202E appear literally *)
+      assert (
+        let re = "\\xe2\\x80\\xae" in
+        let n = String.length re and h = String.length rendered in
+        let rec go i = i + n <= h && (String.sub rendered i n = re || go (i + 1)) in
+        go 0)
+  | _ -> failwith "bidi render");
+
   print_endline "all replay tests passed"

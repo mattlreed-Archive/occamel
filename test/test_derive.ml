@@ -142,4 +142,43 @@ let () =
       assert (List.assoc "default" kvs = `Int 5)
   | _ -> failwith "max_results schema");
 
+  (* F1/§13.8: safe_message must never contain payload bytes. Feed a sentinel
+     through every echoing channel and assert it is absent from safe_message
+     (while error_to_string, the local form, may contain it). *)
+  let sentinel = "INJECT_ME_42" in
+  let safe_of r =
+    match r with Ok _ -> "" | Error e -> Occamel.Codec.safe_message e
+  in
+  let contains_sentinel s =
+    let n = String.length sentinel and h = String.length s in
+    let rec go i = i + n <= h && (String.sub s i n = sentinel || go (i + 1)) in
+    go 0
+  in
+  (* unexpected field name *)
+  assert (
+    not
+      (contains_sentinel
+         (safe_of
+            (search_args_of_json
+               (json (Printf.sprintf {|{"query":"x","max_results":1,"site":null,"%s":1}|} sentinel))))));
+  (* unknown enum value *)
+  assert (
+    not
+      (contains_sentinel
+         (safe_of (action_of_json (json (Printf.sprintf {|{"kind":"%s"}|} sentinel))))));
+  (* invalid JSON echoes the offending token in msg but not safe_message *)
+  (match Occamel.Codec.of_string ~of_json:action_of_json (sentinel ^ "@@@") with
+  | Error e ->
+      assert (not (contains_sentinel (Occamel.Codec.safe_message e)))
+  | Ok _ -> failwith "should not parse");
+
+  (* F2/§13.8: pathological nesting is rejected structurally, no crash *)
+  (match Occamel.Codec.of_string ~of_json:action_of_json (String.make 100000 '[') with
+  | Error _ -> ()
+  | Ok _ -> failwith "deep nesting should be rejected");
+
+  (* F5: duplicate keys rejected *)
+  expect_error "duplicate key"
+    (search_args_of_json (json {|{"query":"a","query":"b","max_results":1,"site":null}|}));
+
   print_endline "all derive tests passed"

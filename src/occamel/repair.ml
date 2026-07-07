@@ -12,12 +12,15 @@ type 'e failure =
   [ `Unparseable of Codec.error list  (* one error per failed attempt, in order *)
   | `Backend of 'e ]
 
+(* §13.8: built ONLY from the payload-free category (Codec.safe_message uses
+   code + structural path — never err.msg, which may carry attacker/model
+   bytes) and the schema. An injection that deliberately fails validation
+   gets no fragment of its own payload re-presented. *)
 let repair_message ~(schema : Yojson.Safe.t) (err : Codec.error) : string =
   Printf.sprintf
-    "Your previous response was rejected by the validator and was NOT used. \
-     Problem at %s: %s. Reply again with ONLY a JSON value conforming to \
-     this schema:\n%s"
-    err.Codec.path err.Codec.msg
+    "Your previous response was rejected by the validator and was NOT used \
+     (%s). Reply again with ONLY a JSON value conforming to this schema:\n%s"
+    (Codec.safe_message err)
     (Yojson.Safe.to_string schema)
 
 (* Returns the parsed value plus the errors of the failed attempts that

@@ -20,7 +20,7 @@ type t = step list
 (* M0: single tool, fixed here. Post-M0 the enum comes from the registry. *)
 let known_tools = [ "web_search" ]
 
-type error = Codec.error = { path : string; msg : string }
+type error = Codec.error
 
 let error_to_string = Codec.error_to_string
 
@@ -157,7 +157,7 @@ let expr_of_json path json =
       let* value = field path "value" json in
       let* value = as_string (path ^ ".value") value in
       Ok (Lit value)
-  | other -> err (path ^ ".kind") (Printf.sprintf "unknown expr kind %S" other)
+  | other -> err ~code:Bad_enum (path ^ ".kind") (Printf.sprintf "unknown expr kind %S" other)
 
 let arg_of_json path json =
   let* () = no_extra_fields path [ "name"; "value" ] json in
@@ -179,7 +179,7 @@ let rec step_of_json ~allow_if path json =
       let* tool = nonempty (path ^ ".tool") tool in
       let* () =
         if List.mem tool known_tools then Ok ()
-        else err (path ^ ".tool") (Printf.sprintf "unknown tool %S" tool)
+        else err ~code:Bad_enum (path ^ ".tool") (Printf.sprintf "unknown tool %S" tool)
       in
       let* args = field path "args" json in
       let* args = as_list (path ^ ".args") args in
@@ -210,8 +210,8 @@ let rec step_of_json ~allow_if path json =
       let* else_ = as_list (path ^ ".else") else_ in
       let* else_ = map_result (step_of_json ~allow_if:false) 0 (path ^ ".else") else_ in
       Ok (If { cond; then_; else_ })
-  | "if" -> err path "nested \"if\" is not allowed (schema is depth-unrolled)"
-  | other -> err (path ^ ".op") (Printf.sprintf "unknown op %S" other)
+  | "if" -> err ~code:Bad_enum path "nested \"if\" is not allowed (schema is depth-unrolled)"
+  | other -> err ~code:Bad_enum (path ^ ".op") (Printf.sprintf "unknown op %S" other)
 
 (* Scoping: binds must be fresh, vars must be bound before use. After an [If],
    only names bound before it remain in scope (a branch may not have run). *)
@@ -220,11 +220,11 @@ let validate_scoping (plan : t) : (unit, error) result =
     | Lit _ -> Ok ()
     | Var name ->
         if List.mem name bound then Ok ()
-        else err path (Printf.sprintf "variable %S used before being bound" name)
+        else err ~code:Refinement_failed path (Printf.sprintf "variable %S used before being bound" name)
   in
   let bind_ok path bound name =
     if List.mem name bound then
-      err path (Printf.sprintf "name %S is already bound" name)
+      err ~code:Refinement_failed path (Printf.sprintf "name %S is already bound" name)
     else Ok ()
   in
   let rec go path i bound = function
@@ -263,12 +263,14 @@ let of_json (json : Yojson.Safe.t) : (t, error) result =
   let* () = no_extra_fields "plan" [ "steps" ] json in
   let* steps = field "plan" "steps" json in
   let* steps = as_list "plan.steps" steps in
-  let* () = if steps = [] then err "plan.steps" "plan must not be empty" else Ok () in
+  let* () =
+    if steps = [] then err ~code:Refinement_failed "plan.steps" "plan must not be empty"
+    else Ok ()
+  in
   let* plan = map_result (step_of_json ~allow_if:true) 0 "steps" steps in
   let* () = validate_scoping plan in
   Ok plan
 
-let of_string (s : string) : (t, error) result =
-  match Yojson.Safe.from_string s with
-  | json -> of_json json
-  | exception Yojson.Json_error msg -> err "plan" ("invalid JSON: " ^ msg)
+(* Reuse Codec.of_string for the §13.8 size/depth guards and the
+   Stack_overflow-safe parse. *)
+let of_string (s : string) : (t, error) result = Codec.of_string ~of_json s
