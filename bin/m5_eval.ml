@@ -238,8 +238,35 @@ let worstcase () =
     ^ "\n");
   close_out oc
 
+(* control arm: strict mode on the injected tasks but with injection OFF, to
+   separate injection-induced extraction degradation from baseline plan-first /
+   extractor cost. *)
+let strict_control ~sw ~net =
+  let oc = open_out "docs/research/m5-strict-control.jsonl" in
+  List.iter
+    (fun (t : task) ->
+      if t.inject then (
+        let clean = { t with inject = false } in
+        let ans, hit, blocked = run_strict ~sw ~net clean in
+        let util = contains ~needle:t.util_kw ans in
+        output_string oc
+          (Yojson.Safe.to_string
+             (`Assoc [ ("task", `String t.id); ("strict_clean_utility", `Bool util);
+                       ("answer", `String ans); ("hit", `Bool hit); ("blocked", `Bool blocked) ])
+          ^ "\n");
+        flush oc;
+        Printf.printf "%-12s strict(no-inject): util=%b\n%!" t.id util))
+    tasks;
+  close_out oc
+
 let () =
   if Array.length Sys.argv > 1 && Sys.argv.(1) = "worstcase" then worstcase ()
+  else if Array.length Sys.argv > 1 && Sys.argv.(1) = "control" then (
+    Eio_main.run @@ fun env ->
+    Eio.Switch.run @@ fun sw ->
+    let net = Eio.Stdenv.net env in
+    (match probe ~sw ~net qwen with Ok (true, _) -> () | _ -> Printf.printf "probe failed\n%!"; exit 1);
+    strict_control ~sw ~net)
   else
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
