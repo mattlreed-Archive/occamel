@@ -13,7 +13,10 @@ let default_q = "Use web search to find the tallest mountain in the world, then 
 (* Same tool world as loop mode; web_search allows any provenance, so the
    research task always admits. A dangerous tool would carry a require_trusted
    policy; the strict test suite exercises that path directly. *)
-let registry : Occamel.Strict.registry = Occamel.Strict.registry []
+let registry : Occamel.Strict.registry =
+  Occamel.Strict.registry
+    [ Occamel.Strict.tool ~name:"web_search" ~caps:[ Occamel.Strict.Net ]
+        ~arg_schema:(Occamel.Strict.obj_schema [ ("query", "string") ]) () ]
 
 let planner_prompt = Eval_common.system_prompt
 

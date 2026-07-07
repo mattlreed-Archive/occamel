@@ -7,7 +7,11 @@
 
 module SR = Occamel.Strict_run
 
-let registry : Occamel.Strict.registry = Occamel.Strict.registry []
+let ws =
+  Occamel.Strict.tool ~name:"web_search" ~caps:[ Occamel.Strict.Net ]
+    ~arg_schema:(Occamel.Strict.obj_schema [ ("query", "string") ]) ()
+
+let registry : Occamel.Strict.registry = Occamel.Strict.registry [ ws ]
 let trace_path = "golden/strict.trace.jsonl"
 
 let () =
@@ -41,7 +45,10 @@ let () =
      verify the re-admission seam fires by using a registry that denies EVERY
      web_search query provenance. *)
   let strict_registry : Occamel.Strict.registry =
-    Occamel.Strict.registry [ Occamel.Strict.require_trusted ~tool:"web_search" ~fields:[ "query" ] ]
+    Occamel.Strict.registry
+      [ Occamel.Strict.tool ~name:"web_search" ~caps:[ Occamel.Strict.Net ]
+          ~arg_schema:(Occamel.Strict.obj_schema [ ("query", "string") ])
+          ~policy:(Occamel.Strict.require_trusted ~fields:[ "query" ]) () ]
   in
   (* literal queries are trusted, so even this admits — the point is the seam
      runs admission at all; assert it returns a result rather than bypassing. *)

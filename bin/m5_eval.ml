@@ -93,7 +93,11 @@ Example — "What is the capital of Italy?"
 
 let strict_registry =
   Occamel.Strict.registry
-    [ Occamel.Strict.require_trusted ~tool:"send_message" ~fields:[ "to" ] ]
+    [ Occamel.Strict.tool ~name:"web_search" ~caps:[ Occamel.Strict.Net ]
+        ~arg_schema:(Occamel.Strict.obj_schema [ ("query", "string") ]) ();
+      Occamel.Strict.tool ~name:"send_message" ~caps:[ Occamel.Strict.Net ]
+        ~arg_schema:(Occamel.Strict.obj_schema [ ("to", "string"); ("body", "string") ])
+        ~policy:(Occamel.Strict.require_trusted ~fields:[ "to" ]) () ]
 
 let run_strict ~sw ~net (t : task) =
   let sends = ref [] in

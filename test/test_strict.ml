@@ -19,13 +19,20 @@ let () =
 (* ---------- a small strict world ---------- *)
 
 (* delete.path must be trusted; web_search / send allow anything except
-   send.to which needs approval when untrusted *)
-let registry : S.registry =
-  S.registry
-    [
-      S.require_trusted ~tool:"delete" ~fields:[ "path" ];
-      S.approve_if_untrusted ~tool:"send" ~fields:[ "to" ];
-    ]
+   send.to which needs approval when untrusted. Every tool has a spec
+   (capabilities + arg schema + policy) — no spec = no call (§13.3). *)
+let ws = S.tool ~name:"web_search" ~caps:[ S.Net ]
+    ~arg_schema:(S.obj_schema [ ("query", "string") ]) ()
+
+let del = S.tool ~name:"delete" ~caps:[ S.Fs_write ]
+    ~arg_schema:(S.obj_schema [ ("path", "string") ])
+    ~policy:(S.require_trusted ~fields:[ "path" ]) ()
+
+let snd_ = S.tool ~name:"send" ~caps:[ S.Net ]
+    ~arg_schema:(S.obj_schema [ ("to", "string"); ("body", "string") ])
+    ~policy:(S.approve_if_untrusted ~fields:[ "to" ]) ()
+
+let registry : S.registry = S.registry [ ws; del; snd_ ]
 
 let hooks ~approve : S.exec_hooks =
   {
@@ -170,33 +177,35 @@ let () =
 
   (* H1: two policies for the same tool must BOTH apply (most-restrictive
      wins). A dropped require_trusted would fail open. *)
-  let multi : S.registry =
-    S.registry
-      [
-        S.require_trusted ~tool:"send" ~fields:[ "to" ];
-        S.approve_if_untrusted ~tool:"send" ~fields:[ "body" ];
-      ]
-  in
+  (* H1: a tool's policy can combine several field rules; the most-restrictive
+     wins (no rule silently dropped) *)
+  let multi_send = S.tool ~name:"send" ~caps:[ S.Net ]
+      ~arg_schema:(S.obj_schema [ ("to", "string"); ("body", "string") ])
+      ~policy:(S.combine
+                 [ S.require_trusted ~fields:[ "to" ];
+                   S.approve_if_untrusted ~fields:[ "body" ] ]) () in
+  let multi : S.registry = S.registry [ ws; multi_send ] in
   let untrusted_to : Pl.t =
     [ Call { bind = "r"; tool = "web_search"; args = [ ("query", Lit "q") ] };
       Call { bind = "s"; tool = "send";
              args = [ ("to", Var "r"); ("body", Lit "hi") ] };
       Return (Var "s") ]
   in
-  (* to is require_trusted + untrusted -> Deny, even though a second policy
-     exists for the tool *)
+  (* to is require_trusted + untrusted -> Deny, combined with the body rule *)
   assert (S.admit multi untrusted_to <> Ok ());
 
-  (* M2: default_policy makes an unlisted tool fail closed *)
-  let fail_closed : S.registry =
-    S.registry ~default_policy:(fun _ _ -> S.Deny "no policy for this tool") []
-  in
+  (* Item 1 / §13.3: a tool with NO spec cannot be called — default-deny, no
+     silent Allow *)
   let uses_unlisted : Pl.t =
     [ Call { bind = "d"; tool = "delete"; args = [ ("path", Lit "/a") ] }; Return (Var "d") ]
   in
-  assert (S.admit fail_closed uses_unlisted <> Ok ());
-  (* and the permissive default still allows it *)
-  assert (S.admit (S.registry []) uses_unlisted = Ok ());
+  assert (S.admit (S.registry [ ws ]) uses_unlisted <> Ok ());  (* delete not registered *)
+  assert (S.admit registry uses_unlisted = Ok ());  (* delete registered, literal path trusted *)
+
+  (* Item 1: a tool whose capability is not granted is rejected *)
+  let ungranted : S.registry = S.registry ~granted:[ S.Net ] [ ws; del ] in
+  (* del needs Fs_write, only Net granted *)
+  assert (S.admit ungranted uses_unlisted <> Ok ());
 
   (* M5: a plan with an unbound var reference is rejected by admission
      (scoping check + untrusted-unknown), not silently treated as trusted *)

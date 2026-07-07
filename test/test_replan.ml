@@ -9,7 +9,9 @@ module St = Occamel.Strict
 module Pl = Occamel.Plan
 module T = Occamel.Trusted
 
-let registry = St.registry []
+let ws = St.tool ~name:"web_search" ~caps:[ St.Net ] ~arg_schema:(St.obj_schema [ ("query", "string") ]) ()
+let flaky = St.tool ~name:"flaky" ~arg_schema:(St.obj_schema [ ("q", "string") ]) ()
+let registry = St.registry [ ws; flaky ]
 
 (* a planner that inspects the (trusted) goal text: first attempt uses a
    failing tool; once the goal carries the revision note, it uses web_search *)
@@ -70,7 +72,11 @@ let () =
     !seen_goals;
 
   (* a denied sink is NOT replanned (only transient tool failures are) *)
-  let deny_reg = St.registry [ St.require_trusted ~tool:"web_search" ~fields:[ "query" ] ] in
+  let src = St.tool ~name:"src" ~arg_schema:(St.obj_schema [ ("q", "string") ]) () in
+  let ws_trusted = St.tool ~name:"web_search" ~caps:[ St.Net ]
+      ~arg_schema:(St.obj_schema [ ("query", "string") ])
+      ~policy:(St.require_trusted ~fields:[ "query" ]) () in
+  let deny_reg = St.registry [ src; ws_trusted ] in
   let deny_planner (_ : T.t) : (Pl.t, string) result =
     (* query derived from a prior tool result => untrusted => denied *)
     Ok [ Pl.Call { bind = "a"; tool = "src"; args = [ ("q", Lit "x") ] };

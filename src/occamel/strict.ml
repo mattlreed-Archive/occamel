@@ -18,61 +18,21 @@
 
 type value = { data : string; prov : Prov.t }
 
+(* ---------- capabilities (§13.3, Item 1) ---------- *)
+
+type cap = Fs_read | Fs_write | Net | Exec
+
+let cap_to_string = function
+  | Fs_read -> "fs_read" | Fs_write -> "fs_write" | Net -> "net" | Exec -> "exec"
+
+let all_caps = [ Fs_read; Fs_write; Net; Exec ]
+
 (* ---------- sink policies (§6.3) ---------- *)
 
 type verdict = Allow | Deny of string | Needs_approval
 
-(* A policy answers: may THIS tool's THIS field receive a value of this
-   provenance? Registered per tool; the default for an unlisted field is
-   [default]. Guarded fields name the provenance requirement explicitly. *)
-type policy = {
-  tool : string;
-  field_policy : string -> Prov.t -> verdict;  (* field name, provenance *)
-}
-
-let default_field_policy (_ : string) (_ : Prov.t) : verdict = Allow
-
-(* Convenience: require trusted provenance for the named fields, allow the
-   rest. The workhorse for tools like delete/send. *)
-let require_trusted ~tool ~fields : policy =
-  {
-    tool;
-    field_policy =
-      (fun field prov ->
-        if List.mem field fields then
-          if Prov.is_trusted prov then Allow
-          else Deny (Printf.sprintf "%s.%s requires trusted provenance, got %s" tool field
-                       (Prov.to_string prov))
-        else Allow);
-  }
-
-(* Require approval (not outright deny) for named fields carrying untrusted
-   provenance — the escalation path. *)
-let approve_if_untrusted ~tool ~fields : policy =
-  {
-    tool;
-    field_policy =
-      (fun field prov ->
-        if List.mem field fields && not (Prov.is_trusted prov) then Needs_approval
-        else Allow);
-  }
-
-type registry = {
-  policies : policy list;
-  default_policy : (string -> Prov.t -> verdict) option;
-  (* verdict for a tool with NO matching policy. None => Allow (permissive, the
-     M3 default). Set to a deny/approve function for fail-closed registries
-     (partial mitigation for the §13.3 capability axis, deferred to M4): a
-     newly added dangerous tool whose policy the author forgot is then denied,
-     not silently opened. *)
-}
-
-let registry ?default_policy policies = { policies; default_policy }
-
-(* H1 fix: combine ALL policies matching a tool, taking the most restrictive
-   verdict (Deny > Needs_approval > Allow). Returning only the first match
-   silently dropped the rest — a dropped require_trusted is a fail-open of the
-   flagship control. *)
+(* H1 (M3 review): combine verdicts by most-restrictive (Deny > Needs_approval
+   > Allow), so a guarding policy is never silently dropped. *)
 let most_restrictive a b =
   match (a, b) with
   | Deny r, _ -> Deny r
@@ -80,15 +40,71 @@ let most_restrictive a b =
   | Needs_approval, _ | _, Needs_approval -> Needs_approval
   | Allow, Allow -> Allow
 
-let field_verdict (reg : registry) (tool : string) (field : string) (prov : Prov.t) :
-    verdict =
-  match List.filter (fun p -> p.tool = tool) reg.policies with
-  | [] -> (
-      match reg.default_policy with Some d -> d field prov | None -> Allow)
-  | ps ->
-      List.fold_left
-        (fun acc p -> most_restrictive acc (p.field_policy field prov))
-        Allow ps
+type field_policy = string -> Prov.t -> verdict
+
+let allow_all : field_policy = fun _ _ -> Allow
+
+(* Require trusted provenance for the named fields. *)
+let require_trusted ~fields : field_policy =
+ fun field prov ->
+  if List.mem field fields then
+    if Prov.is_trusted prov then Allow
+    else Deny (Printf.sprintf "%s requires trusted provenance, got %s" field (Prov.to_string prov))
+  else Allow
+
+(* Escalate to approval for named fields carrying untrusted provenance. *)
+let approve_if_untrusted ~fields : field_policy =
+ fun field prov ->
+  if List.mem field fields && not (Prov.is_trusted prov) then Needs_approval else Allow
+
+let combine (ps : field_policy list) : field_policy =
+ fun field prov -> List.fold_left (fun acc p -> most_restrictive acc (p field prov)) Allow ps
+
+(* ---------- tool spec (§13.3 + §3.3, Items 1+2) ----------
+   Every tool a plan may call declares its capability footprint, an object
+   arg-schema (field names + types), a per-field sink policy, and an optional
+   semantic refinement (§3.3, e.g. "path inside workspace"). A tool with no
+   spec cannot be called — no silent Allow. *)
+type tool_spec = {
+  ts_name : string;
+  ts_caps : cap list;
+  ts_arg_schema : Schema.t;  (* object schema, or `Null for "no typed args" *)
+  ts_policy : field_policy;
+  ts_refine : (string * value) list -> (unit, string) result;
+}
+
+let tool ~name ?(caps = []) ?(arg_schema = `Null) ?(policy = allow_all)
+    ?(refine = fun _ -> Ok ()) () : tool_spec =
+  { ts_name = name; ts_caps = caps; ts_arg_schema = arg_schema; ts_policy = policy; ts_refine = refine }
+
+(* helper: an object arg-schema from (field, json-type) pairs, closed *)
+let obj_schema (fields : (string * string) list) : Schema.t =
+  `Assoc
+    [
+      ("type", `String "object");
+      ("properties", `Assoc (List.map (fun (f, ty) -> (f, `Assoc [ ("type", `String ty) ])) fields));
+      ("required", `List (List.map (fun (f, _) -> `String f) fields));
+      ("additionalProperties", `Bool false);
+    ]
+
+type registry = { specs : tool_spec list; granted : cap list }
+
+(* granted defaults to all capabilities (convenience); a fail-closed registry
+   passes ~granted explicitly so a tool's caps ⊄ granted is denied. *)
+let registry ?(granted = all_caps) specs = { specs; granted }
+
+let spec_of (reg : registry) (tool : string) : tool_spec option =
+  List.find_opt (fun s -> s.ts_name = tool) reg.specs
+
+(* declared field names for a tool's arg schema (for the field-name consistency
+   check at admission) *)
+let declared_fields (s : tool_spec) : string list option =
+  match s.ts_arg_schema with
+  | `Assoc _ -> (
+      match Schema.member "properties" s.ts_arg_schema with
+      | Some (`Assoc props) -> Some (List.map fst props)
+      | _ -> None)
+  | _ -> None
 
 (* ---------- static provenance walk / admission (§6.4) ---------- *)
 
@@ -132,23 +148,43 @@ let analyze (reg : registry) (plan : Plan.t) : report =
         | Some p -> p
         | None -> Prov.tool_result ("?unbound:" ^ name))
   in
-  (* check a Call's fields against the sink policy. The effective provenance of
-     an argument is its data-flow provenance joined with the branch taint of
-     the context executing it — a trusted literal inside an untrusted branch is
-     still attacker-influenced (§6.2). *)
+  (* check a Call against its tool spec: the tool must be registered (no silent
+     Allow), its capabilities must be granted (§13.3), its fields must be
+     declared by the arg schema (§3.3 field-name consistency), and each field's
+     effective provenance (data flow joined with branch taint, §6.2) must pass
+     the sink policy. *)
   let check_call env ~branch_taint ~site ~tool ~args =
-    List.iter
-      (fun (field, e) ->
-        let prov = Prov.join branch_taint (prov_of_expr env e) in
-        match field_verdict reg tool field prov with
-        | Allow -> ()
-        | Needs_approval ->
-            approvals :=
-              { s_site = site; s_tool = tool; s_field = field; s_prov = prov;
-                s_verdict = Needs_approval }
-              :: !approvals
-        | Deny reason -> reject site reason)
-      args
+    match spec_of reg tool with
+    | None -> reject site (Printf.sprintf "no tool spec for %S (default-deny)" tool)
+    | Some spec ->
+        (* Item 1: capability footprint must be granted *)
+        List.iter
+          (fun c ->
+            if not (List.mem c reg.granted) then
+              reject site (Printf.sprintf "%s needs ungranted capability %s" tool (cap_to_string c)))
+          spec.ts_caps;
+        (* Item 2: every Call field must be declared by the arg schema *)
+        (match declared_fields spec with
+        | Some fields ->
+            List.iter
+              (fun (field, _) ->
+                if not (List.mem field fields) then
+                  reject site (Printf.sprintf "%s.%s is not a declared argument" tool field))
+              args
+        | None -> ());
+        (* sink policy on each field's effective provenance *)
+        List.iter
+          (fun (field, e) ->
+            let prov = Prov.join branch_taint (prov_of_expr env e) in
+            match spec.ts_policy field prov with
+            | Allow -> ()
+            | Needs_approval ->
+                approvals :=
+                  { s_site = site; s_tool = tool; s_field = field; s_prov = prov;
+                    s_verdict = Needs_approval }
+                  :: !approvals
+            | Deny reason -> reject site reason)
+          args
   in
   (* walk a step list; returns the env extended with its top-level binds.
      branch_taint is added to every binding produced inside a tainted branch. *)
@@ -277,6 +313,36 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
                   Ok ((field, v) :: acc))
                 args (Ok [])
             in
+            let* spec =
+              match spec_of reg tool with
+              | Some s -> Ok s
+              | None -> Error (Denied_sink { site = bind; reason = "no tool spec (default-deny)" })
+            in
+            (* Item 1: capabilities granted *)
+            let* () =
+              List.fold_left
+                (fun acc c ->
+                  let* () = acc in
+                  if List.mem c reg.granted then Ok ()
+                  else Error (Denied_sink { site = bind; reason = "ungranted capability " ^ cap_to_string c }))
+                (Ok ()) spec.ts_caps
+            in
+            (* Item 2: typed-arg validation (values vs the arg schema) + §3.3
+               refinement, the single choke point before the tool sees args *)
+            let* () =
+              match spec.ts_arg_schema with
+              | `Null -> Ok ()
+              | schema ->
+                  let obj = `Assoc (List.map (fun (f, (v : value)) -> (f, `String v.data)) arg_vals) in
+                  (match Schema.validate schema obj with
+                  | Ok () -> Ok ()
+                  | Error m -> Error (Denied_sink { site = bind; reason = "arg schema: " ^ m }))
+            in
+            let* () =
+              match spec.ts_refine arg_vals with
+              | Ok () -> Ok ()
+              | Error m -> Error (Denied_sink { site = bind; reason = "arg refine: " ^ m })
+            in
             (* sink policy at execution, on the actual values. Effective
                provenance joins the branch taint (§6.2), matching admission. *)
             let* () =
@@ -284,7 +350,7 @@ let run (reg : registry) (hooks : exec_hooks) (plan : Plan.t) :
                 (fun acc (field, (v : value)) ->
                   let* () = acc in
                   let eff_prov = Prov.join branch_taint v.prov in
-                  match field_verdict reg tool field eff_prov with
+                  match spec.ts_policy field eff_prov with
                   | Allow -> Ok ()
                   | Deny reason -> Error (Denied_sink { site = bind; reason })
                   | Needs_approval ->
