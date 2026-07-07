@@ -1,3 +1,3 @@
-(executable
- (name m0_eval)
+(executables
+ (names m0_eval m1_repair)
  (libraries occamel occamel_oai eio_main yojson))
